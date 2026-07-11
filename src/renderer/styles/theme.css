@@ -1,0 +1,115 @@
+/* No webfont import: the CSP (style-src 'self') blocks external stylesheets by
+   design, and a desktop app must render identically offline. The font stacks in
+   tailwind.config.js fall back to bundled system fonts. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: radial-gradient(1200px 600px at 50% -10%, #151614 0%, #0d0e0b 55%);
+  color: #eeeee8;
+  font-family: 'DM Sans', 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #252620;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #55554e;
+  background-clip: padding-box;
+}
+
+@layer base {
+  /* Headings use the display face per the design system */
+  h1, h2, h3 {
+    @apply font-display;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-lg border border-border bg-surface shadow-card;
+  }
+  /* Buttons — Space Mono, uppercase, wide tracking, sharp radius (per design system) */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 font-mono text-[10px] font-bold uppercase
+           tracking-[0.12em] text-text bg-surface2 border border-border transition-all
+           hover:bg-raised hover:border-faint active:scale-[0.98]
+           focus-visible:outline-none focus-visible:shadow-glow
+           disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100;
+  }
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-5 py-2 font-mono text-[10px] font-bold uppercase
+           tracking-[0.12em] text-mint-ink bg-mint border border-transparent transition-all
+           hover:opacity-90 active:opacity-80 active:scale-[0.98]
+           focus-visible:outline-none focus-visible:shadow-glow
+           disabled:bg-mint-muted disabled:text-mint-deep disabled:cursor-not-allowed disabled:active:scale-100;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 font-mono text-[10px] font-medium uppercase
+           tracking-[0.1em] text-muted transition-colors hover:text-text hover:bg-surface2;
+  }
+  /* Compact button size — matches the design "Small" spec */
+  .btn-sm {
+    @apply px-3 py-1.5 text-[9px];
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 font-mono text-[10px] font-medium uppercase
+           tracking-[0.08em] bg-surface2 text-muted border border-borderSoft;
+  }
+  .field {
+    @apply w-full rounded-md bg-surface2 border border-border px-3.5 py-2.5 text-sm text-text
+           outline-none transition-shadow placeholder:text-faint
+           focus:border-mint/60 focus:shadow-glow;
+  }
+  .section-title {
+    @apply font-display text-[15px] font-bold text-text;
+  }
+  .section-desc {
+    @apply text-[13px] text-muted leading-relaxed;
+  }
+}
+
+/* gentle skeleton shimmer for loading rows */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: #1c1d1a;
+}
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(110, 232, 122, 0.08),
+    transparent
+  );
+  animation: shimmer 1.4s infinite;
+}

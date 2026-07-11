@@ -1,0 +1,229 @@
+name: Build installers
+
+# Manual trigger (Actions tab → Run workflow), or on a version tag (v1.2.3).
+# Filling in release_tag on a manual run publishes a GitHub Release under that
+# tag (created automatically) — same as pushing the tag, no git access needed.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Publish a release under this tag (e.g. v0.1.0). Leave empty to just build.'
+        required: false
+        default: ''
+  push:
+    tags:
+      - 'v*'
+
+# Needed to create releases and upload assets to them.
+permissions:
+  contents: write
+
+jobs:
+  # Publishing: create the (empty) release page first; each build job then
+  # attaches its installers DIRECTLY to it. This never touches Actions
+  # artifact storage, which has a tiny monthly quota on the free plan.
+  prepare-release:
+    name: Create release page
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.release_tag || github.ref_name }}
+    steps:
+      - name: Create the release (installers attach as each build finishes)
+        run: |
+          cat > notes.md <<'MD'
+          ## Install
+
+          **Windows** — download the `.exe`, run it. If SmartScreen says
+          "Windows protected your PC": click **More info → Run anyway**
+          (the app isn't code-signed yet, so Windows can't verify the publisher).
+
+          **macOS** — pick your chip: `arm64` for M1/M2/M3/M4 Macs,
+          `x64` for older Intel Macs. Easiest install (no warnings at all):
+          BEFORE opening the download, run in Terminal
+          `xattr -d com.apple.quarantine ~/Downloads/ClipRename-*.dmg`,
+          then open the `.dmg` and drag ClipRename to Applications — done.
+
+          If you already installed and macOS claims the app *"is damaged"*
+          (it isn't — it just isn't Apple-notarized yet): right-click
+          **`Fix ClipRename.command`** in the `.dmg` → Open → Open — it now
+          asks for your password if macOS blocks the first attempt. Manual
+          alternative: `sudo xattr -cr /Applications/ClipRename.app`; if that
+          says *"Operation not permitted"*, enable Terminal under System
+          Settings → Privacy & Security → App Management and rerun it.
+          MD
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "ClipRename $TAG" --notes-file notes.md \
+            || echo "Release $TAG already exists — builds will upload assets to it."
+
+  build:
+    name: ${{ matrix.label }}
+    needs: [prepare-release]
+    # Run even when prepare-release is skipped (plain builds, no release).
+    if: always() && needs.prepare-release.result != 'failure'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows (PC)
+            script: build:win
+            artifact: ClipRename-Windows
+          # macOS is built on its native runner so the bundled ffmpeg binary
+          # (ffmpeg-static installs ONE arch per machine) always matches.
+          - os: macos-14 # Apple Silicon (M1/M2/M3/M4)
+            label: macOS (Apple Silicon)
+            script: build:mac
+            artifact: ClipRename-macOS-AppleSilicon
+          - os: macos-15-intel # Intel Macs (pre-2021)
+            label: macOS (Intel)
+            script: build:mac
+            artifact: ClipRename-macOS-Intel
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Type-check
+        run: npm run typecheck
+
+      # ---- Apple signing + notarization (removes the "damaged" warning) ----
+      # Inactive until the repo has the secrets. To turn on real signing (needs
+      # an Apple Developer account, $99/yr), add repo secrets:
+      # MAC_CERT_P12_BASE64 (Developer ID cert, base64), MAC_CERT_PASSWORD,
+      # APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID — then every build
+      # signs + notarizes automatically and macOS installs cleanly.
+      # The env vars are only exported when the cert secret EXISTS: an empty
+      # CSC_LINK makes electron-builder try to read '' as a cert file and die.
+      - name: Configure code signing
+        shell: bash
+        env:
+          MAC_CERT: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          MAC_CERT_PW: ${{ secrets.MAC_CERT_PASSWORD }}
+          AP_ID: ${{ secrets.APPLE_ID }}
+          AP_PW: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          AP_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ] && [ -n "$MAC_CERT" ]; then
+            {
+              echo "CSC_LINK=$MAC_CERT"
+              echo "CSC_KEY_PASSWORD=$MAC_CERT_PW"
+              echo "APPLE_ID=$AP_ID"
+              echo "APPLE_APP_SPECIFIC_PASSWORD=$AP_PW"
+              echo "APPLE_TEAM_ID=$AP_TEAM"
+              echo "CSC_IDENTITY_AUTO_DISCOVERY=true"
+            } >> "$GITHUB_ENV"
+            echo "Apple signing + notarization ENABLED."
+          else
+            # No cert: electron-builder ad-hoc signs the macOS app so it
+            # launches after Gatekeeper is cleared (see the bundled fixer).
+            echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
+            echo "No signing secrets — building unsigned."
+          fi
+
+      - name: Build app + installer
+        run: npm run ${{ matrix.script }}
+
+      # The installers are not code-signed (no Apple/Microsoft certificate), so
+      # both OSes show a scary warning on first launch — macOS even claims the
+      # app "is damaged". Ship the exact unblock steps next to the installer.
+      - name: Add install instructions (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cat > "release/HOW TO INSTALL - READ ME FIRST.txt" <<'TXT'
+          Installing ClipRename on macOS
+          ==============================
+
+          macOS will say the app "is damaged and can't be opened". It is NOT
+          damaged — the app just isn't Apple-notarized yet, and macOS blocks
+          all downloaded unsigned apps with that (misleading) message.
+          IMPORTANT: right-clicking the app and choosing "Open" does NOT get
+          past this particular block. Use one of these instead:
+
+          EASIEST WAY (no warnings at all)
+          --------------------------------
+          BEFORE opening the downloaded .dmg, run this in Terminal:
+
+              xattr -d com.apple.quarantine ~/Downloads/ClipRename-*.dmg
+
+          Then open the .dmg and drag ClipRename into Applications.
+          It launches normally — nothing else to do.
+
+          ALREADY INSTALLED AND BLOCKED?
+          ------------------------------
+          1. In the .dmg window, right-click "Fix ClipRename.command"
+             and choose "Open", then click "Open" in the warning.
+             If macOS blocks the first attempt, it asks for your Mac
+             password and finishes the job.
+          2. Manual alternative:
+
+              sudo xattr -cr /Applications/ClipRename.app
+
+             If that prints "Operation not permitted", go to
+             System Settings > Privacy & Security > App Management,
+             turn ON Terminal, and run the command again.
+
+          PICK THE RIGHT DOWNLOAD
+          -----------------------
+          "AppleSilicon" is for M1/M2/M3/M4 Macs (2021 and newer).
+          "Intel" is for older Intel Macs. The wrong one won't open at all.
+          TXT
+
+      - name: Add install instructions (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cat > "release/HOW TO INSTALL - READ ME FIRST.txt" <<'TXT'
+          Installing ClipRename on Windows
+          ================================
+
+          1. Run ClipRename-Setup.exe.
+
+          2. Windows SmartScreen may show "Windows protected your PC".
+             The app is safe — it just isn't code-signed with a Microsoft
+             certificate yet, so Windows can't verify the publisher.
+
+          3. Click "More info", then "Run anyway", and follow the installer.
+          TXT
+
+      # Publishing: attach the installers straight to the release. The .yml +
+      # .blockmap files are the in-app updater's feed — without them installed
+      # apps can't see or download new versions.
+      - name: Upload installers to the release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: |
+          shopt -s nullglob
+          # latest*.yml only — release/*.yml would also grab builder-debug.yml.
+          # .zip is the macOS in-app updater's payload (dmg is for manual installs).
+          files=(release/*.exe release/*.dmg release/*.zip release/latest*.yml release/*.blockmap)
+          echo "Uploading: ${files[*]}"
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "${files[@]}"
+
+      # Plain builds (no release): keep the week-retention CI artifact. NOTE:
+      # this is the step the free plan's monthly storage quota blocks once
+      # spent — publish a release instead of relying on artifacts.
+      - name: Upload installers (CI artifact)
+        if: ${{ !(startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != '') }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.zip
+            release/*.yml
+            release/*.blockmap
+            release/HOW TO INSTALL - READ ME FIRST.txt
+          if-no-files-found: ignore
+          retention-days: 7

@@ -1,0 +1,64 @@
+appId: com.cliprename.desktop
+# Where the in-app updater looks for new versions (GitHub Releases). Having a
+# publish provider also makes electron-builder emit latest.yml + .blockmap —
+# the update feed files — even when CI builds with --publish never.
+publish:
+  provider: github
+  owner: trysky1
+  repo: Cliprename-desktop-public
+productName: ClipRename
+directories:
+  buildResources: build
+  output: release
+# Squeeze the installer as hard as possible (slower build, smaller download).
+compression: maximum
+# The app UI is English-only; shipping all 55 Chromium locales costs ~40 MB.
+electronLanguages:
+  - en-US
+files:
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!{.eslintrc.cjs,.prettierrc,.prettierignore,tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - '!{tailwind.config.js,postcss.config.js}'
+  # Dev/docs/tooling files that were riding along inside the app package.
+  - '!.claude/**'
+  - '!supabase/**'
+  - '!docs/**'
+  - '!**/*.tsbuildinfo'
+  - '!**/*.map'
+  - '!**/*.md'
+asarUnpack:
+  - resources/**
+  - '**/node_modules/ffmpeg-static/**'
+win:
+  icon: build/icon.ico
+  target:
+    - nsis
+  artifactName: ${productName}-${version}-setup.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  createDesktopShortcut: true
+  shortcutName: ClipRename
+# macOS — same feature set as Windows. Built per-CPU on a native runner (see
+# .github/workflows/build.yml): Apple Silicon (arm64) and Intel (x64) each get a
+# matching bundled ffmpeg. electron-builder ad-hoc signs so the app launches
+# locally after Gatekeeper is cleared.
+# dmg = what people download and install; zip = what the IN-APP updater
+# downloads and swaps in place (see src/main/updater.ts) — both are needed.
+mac:
+  category: public.app-category.video
+  target:
+    - dmg
+    - zip
+  artifactName: ${productName}-${version}-${arch}.${ext}
+dmg:
+  title: ClipRename ${version}
+  # Ship a right-click-to-run fixer next to the app: it clears macOS's
+  # misleading "damaged app" block (we're not notarized) and opens the app.
+  contents:
+    - { x: 140, y: 160 }
+    - { x: 420, y: 160, type: link, path: /Applications }
+    - { x: 280, y: 330, type: file, path: build/Fix ClipRename.command }

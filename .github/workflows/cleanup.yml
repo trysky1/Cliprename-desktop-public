@@ -1,0 +1,52 @@
+name: Clean up old artifacts
+
+# Installer artifacts are ~330 MB per build run. Older runs (and runs from
+# before retention-days was shortened) pile up against the account's Actions
+# storage quota, so this deletes any artifact more than 7 days old. Runs
+# daily, and can be fired manually from the Actions tab to clear the backlog.
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+    inputs:
+      max_age_days:
+        description: 'Delete artifacts older than this many days'
+        default: '7'
+        required: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Delete old artifacts
+        uses: actions/github-script@v8
+        with:
+          script: |
+            // Scheduled runs have no inputs — fall back to the 7-day default.
+            const maxAgeDays = parseFloat('${{ inputs.max_age_days }}') || 7
+            const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000
+            const cutoff = Date.now() - maxAgeMs
+            let deleted = 0
+            let freedBytes = 0
+
+            const artifacts = await github.paginate(
+              github.rest.actions.listArtifactsForRepo,
+              { owner: context.repo.owner, repo: context.repo.repo, per_page: 100 }
+            )
+
+            for (const artifact of artifacts) {
+              if (artifact.expired) continue
+              if (new Date(artifact.created_at).getTime() >= cutoff) continue
+              await github.rest.actions.deleteArtifact({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                artifact_id: artifact.id,
+              })
+              deleted++
+              freedBytes += artifact.size_in_bytes
+              core.info(`Deleted ${artifact.name} (${(artifact.size_in_bytes / 1e6).toFixed(0)} MB, created ${artifact.created_at})`)
+            }
+
+            core.notice(`Deleted ${deleted} artifact(s), freed ${(freedBytes / 1e9).toFixed(2)} GB.`)
