@@ -192,6 +192,9 @@ export function buildPlanFromAssignments(
   for (const a of assignments) {
     const item = byId.get(a.id)
     if (!item) continue
+    // Empty target folder means "(stays in place)" in the UI — honor that
+    // instead of relocating the file to the output-dir root.
+    if (!(a.targetFolder || '').trim()) continue
     const base = sanitizeSegment(a.suggestedName || item.suggestedName || item.baseName)
     const fileName = `${base}.${item.ext}`
     const folder = (a.targetFolder || '')
@@ -258,18 +261,31 @@ export async function applyPlan(plan: PlanItem[], options: ApplyOptions): Promis
 
   for (const p of plan) {
     try {
-      const target = await uniqueTarget(path.join(options.outputDir, p.toRelPath))
-      await fs.mkdir(path.dirname(target), { recursive: true })
-      if (path.resolve(target) === path.resolve(p.fromPath)) {
+      const intended = path.join(options.outputDir, p.toRelPath)
+      // Re-applying an unchanged plan must be a no-op: check "already at
+      // destination" BEFORE uniqueTarget, or the file would collide with
+      // itself and get renamed to a pointless "name-1" duplicate.
+      if (path.resolve(intended) === path.resolve(p.fromPath)) {
         continue // source already at destination
       }
+      const target = await uniqueTarget(intended)
+      await fs.mkdir(path.dirname(target), { recursive: true })
       if (options.mode === 'move') {
         try {
           await fs.rename(p.fromPath, target)
-        } catch {
-          // cross-device fallback
+        } catch (e) {
+          // Only EXDEV (cross-device) warrants the copy+unlink fallback —
+          // anything else (permissions, locks) must surface as an error.
+          if ((e as NodeJS.ErrnoException).code !== 'EXDEV') throw e
           await fs.copyFile(p.fromPath, target)
-          await fs.unlink(p.fromPath)
+          try {
+            await fs.unlink(p.fromPath)
+          } catch (unlinkErr) {
+            // Source couldn't be removed: delete the fresh copy so we don't
+            // leave an unjournaled duplicate behind.
+            await fs.unlink(target).catch(() => {})
+            throw unlinkErr
+          }
         }
       } else {
         await fs.copyFile(p.fromPath, target)
@@ -321,10 +337,18 @@ export async function renameInPlace(items: MediaItem[]): Promise<ApplyResult> {
 
       try {
         await fs.rename(from, target)
-      } catch {
+      } catch (e) {
         // cross-device fallback (shouldn't happen in-place, but mirror applyPlan)
+        if ((e as NodeJS.ErrnoException).code !== 'EXDEV') throw e
         await fs.copyFile(from, target)
-        await fs.unlink(from)
+        try {
+          await fs.unlink(from)
+        } catch (unlinkErr) {
+          // Source couldn't be removed: delete the fresh copy so we don't
+          // leave an unjournaled duplicate behind.
+          await fs.unlink(target).catch(() => {})
+          throw unlinkErr
+        }
       }
       ops.push({ from, to: target })
     } catch (e) {
@@ -404,6 +428,7 @@ export async function undoJournal(journalId: string): Promise<{ undone: number; 
     return { undone: 0, errors: ['Journal not found.'] }
   }
   const errors: string[] = []
+  const failed = new Set<{ from: string; to: string }>()
   let undone = 0
   for (const op of [...journal.ops].reverse()) {
     try {
@@ -418,9 +443,17 @@ export async function undoJournal(journalId: string): Promise<{ undone: number; 
       }
       undone++
     } catch (e) {
+      failed.add(op)
       errors.push(`${op.to}: ${e instanceof Error ? e.message : String(e)}`)
     }
   }
-  await fs.unlink(file).catch(() => {})
+  if (errors.length === 0) {
+    await fs.unlink(file).catch(() => {})
+  } else {
+    // Some ops failed — keep the journal with ONLY the failed ops so the undo
+    // can be retried later, instead of losing the trail entirely.
+    const remaining: JournalEntry = { ...journal, ops: journal.ops.filter((op) => failed.has(op)) }
+    await fs.writeFile(file, JSON.stringify(remaining, null, 2)).catch(() => {})
+  }
   return { undone, errors }
 }

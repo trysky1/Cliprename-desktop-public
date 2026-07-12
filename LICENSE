@@ -1,0 +1,43 @@
+ClipRename Desktop — Source-Available License
+
+Copyright (c) 2026 ClipRename. All rights reserved.
+
+1. Grant
+
+Subject to the terms below, you are granted a limited, non-exclusive,
+non-transferable, revocable permission to:
+
+  a. view and study the source code in this repository; and
+  b. build and run the software on your own devices for personal,
+     non-commercial use.
+
+2. Restrictions
+
+Except with prior written permission from ClipRename, you may NOT:
+
+  a. redistribute the source code or any builds of the software, in whole
+     or in part, modified or unmodified;
+  b. offer the software, or any derivative of it, as a product or service
+     (including hosted, bundled, or commercial offerings); or
+  c. remove or alter any copyright, license, or attribution notices.
+
+3. Official builds
+
+Official builds of ClipRename Desktop are distributed only via the GitHub
+releases page (https://github.com/trysky1/Cliprename-desktop-public/releases)
+and https://cliprename.com. Builds obtained elsewhere are not official and
+are not supported.
+
+4. No warranty
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+5. Termination
+
+Any violation of these terms automatically terminates this permission.

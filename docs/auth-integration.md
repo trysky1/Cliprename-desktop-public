@@ -1,3 +1,5 @@
+> **Internal engineering notes** — not user documentation.
+
 # Auth Integration Reference (Phase 6)
 
 How to connect the **ClipRename desktop app** to **cliprename.com** so they share

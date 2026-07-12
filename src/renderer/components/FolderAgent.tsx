@@ -129,12 +129,17 @@ export default function FolderAgent({
   }
 
   async function generateNames(): Promise<void> {
-    if (items.length === 0) return
+    // Unticked files are excluded from the AI call too — at 1 credit per file,
+    // naming clips the user just deselected would silently bill them.
+    const wanted = items.filter((i) => !excluded.has(i.id))
+    if (wanted.length === 0) return
     setNaming(true)
     setResult(null)
-    setItems((prev) => prev.map((i) => ({ ...i, status: 'analyzing' as const })))
+    setItems((prev) =>
+      prev.map((i) => (excluded.has(i.id) ? i : { ...i, status: 'analyzing' as const }))
+    )
     try {
-      const res = await window.api.suggest(items)
+      const res = await window.api.suggest(wanted)
       const map = new Map(res.items.map((i) => [i.id, i]))
       setItems((prev) => prev.map((i) => map.get(i.id) ?? i))
       flash('Names ready.', 'ok')
@@ -214,7 +219,7 @@ export default function FolderAgent({
     if (!journalId) return
     try {
       const res = await window.api.undo(journalId)
-      flash(`Reversed ${res.undone} files.`, res.errors.length ? 'err' : 'ok')
+      flash(`Undo complete — ${res.undone} files are back where they were.`, res.errors.length ? 'err' : 'ok')
       setResult(null)
       setJournalId('')
       const fresh = await window.api.agentScan(root)
@@ -389,7 +394,7 @@ export default function FolderAgent({
               ) : namedCount > 0 ? (
                 'Suggest names again'
               ) : (
-                `Suggest names for ${items.length} clips`
+                `Suggest names for ${items.filter((i) => !excluded.has(i.id)).length} files`
               )}
             </button>
             {items.length > 0 && (

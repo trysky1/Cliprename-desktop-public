@@ -152,7 +152,7 @@ export default function DropZone({
             <button
               onClick={() => onRemoveSource(s)}
               title="Remove this source"
-              className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-faint opacity-0 transition-all hover:bg-peach/10 hover:text-peach group-hover:opacity-100"
+              className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-faint opacity-60 transition-all hover:bg-peach/10 hover:text-peach group-hover:opacity-100"
             >
               ✕
             </button>

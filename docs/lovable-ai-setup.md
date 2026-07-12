@@ -1,3 +1,5 @@
+> **Internal engineering notes** — not user documentation.
+
 # Connect ClipRename to your Lovable AI credits (no key for users)
 
 > **Enable desktop sign-in (1 step — build the handoff page).** The website

@@ -290,7 +290,7 @@ export default function AutomationPanel(): React.ReactElement {
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-[13px] text-text">{r.folder}</div>
                     <div className="text-[10px] text-faint">
-                      {r.mode === 'rename' ? 'Rename in place' : `${r.mode} → ${r.subfolder}`} · {r.style}
+                      {r.mode === 'rename' ? 'Rename in place' : `${r.mode} → ${r.subfolder}`} · {NAMING_STYLES.find((s) => s.id === r.style)?.label ?? r.style}
                       {' · '}
                       <span className={r.enabled ? 'text-mint' : 'text-faint'}>
                         {!r.enabled
@@ -340,7 +340,7 @@ export default function AutomationPanel(): React.ReactElement {
                             : `moves renamed files into “${r.subfolder}”`}
                       </span>
                       <span>
-                        <span className="text-faint">Style:</span> {r.style}
+                        <span className="text-faint">Style:</span> {NAMING_STYLES.find((s) => s.id === r.style)?.label ?? r.style}
                       </span>
                       <span>
                         <span className="text-faint">Since:</span> {whenOf(r.createdAt)}

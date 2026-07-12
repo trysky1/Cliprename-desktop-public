@@ -1,4 +1,5 @@
 appId: com.cliprename.desktop
+copyright: Copyright © 2026 ClipRename
 # Where the in-app updater looks for new versions (GitHub Releases). Having a
 # publish provider also makes electron-builder emit latest.yml + .blockmap —
 # the update feed files — even when CI builds with --publish never.

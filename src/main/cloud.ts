@@ -305,7 +305,6 @@ export async function status(): Promise<CloudStatus> {
     // Website parity (Dashboard: isMax = isSandbox || subscription.isMax):
     // tester accounts count as Max even with no Stripe subscription.
     if (tester && tier === 'free') tier = 'max'
-    console.log('[cloud] plan:', JSON.stringify(sub), 'tester:', tester, '→ tier', tier)
     return { signedIn: true, email: s.email, tier, tester }
   } catch (e) {
     // If the failure was a rejected refresh token, freshAccessToken already

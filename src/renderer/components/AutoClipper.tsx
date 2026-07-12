@@ -58,7 +58,7 @@ export default function AutoClipper({ items, onClips }: Props): React.ReactEleme
           )
         } else if (a && a.mode === 'silence') {
           setNote(
-            `No dead air found — the sound never stayed below ${Math.round(a.thresholdDb)} dB (this clip peaks at ${Math.round(a.maxDb)} dB). Try Tight for shorter pauses${selected.kind !== 'audio' ? ', or “Still picture” mode' : ''}.`
+            `No dead air found — this clip has sound almost the whole way through. Try “Tight” for shorter pauses${selected.kind !== 'audio' ? ', or “Still picture” mode' : ''}.`
           )
         } else {
           setNote('No frozen parts found — the picture keeps moving. Try Tight, or “Silence” mode.')

@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react'
 import { ApplyMode, MediaItem } from '../../shared/types'
+import { useEscape } from '../lib/useEscape'
 
 interface Props {
   items: MediaItem[]
@@ -24,6 +25,7 @@ export default function PreviewModal({
   onApply,
   applying
 }: Props): React.ReactElement {
+  useEscape(onClose)
   const [edits, setEdits] = useState<Record<string, string>>({})
   const [mode, setMode] = useState<ApplyMode>(defaultMode)
   const [organize, setOrganize] = useState(organizeByCategory)

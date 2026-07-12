@@ -12,7 +12,9 @@ interface Props {
   live: boolean
   applying: boolean
   onPlan: (instruction: string) => Promise<SortPlan>
-  onApplyOption: (option: SortOption) => void
+  onApplyOption: (option: SortOption) => Promise<boolean>
+  // 'move' relocates originals; 'copy' leaves them in place — shown on each option.
+  applyMode: 'copy' | 'move'
   onOpenSupport: () => void
 }
 
@@ -64,10 +66,14 @@ export default function ChatSort({
   applying,
   onPlan,
   onApplyOption,
+  applyMode,
   onOpenSupport
 }: Props): React.ReactElement {
   const [input, setInput] = useState('')
   const [msgs, setMsgs] = useState<Msg[]>([])
+  // Once a layout is applied the files have moved — every other plan in the
+  // chat is stale, so all apply buttons lock to prevent double-applies.
+  const [appliedOnce, setAppliedOnce] = useState(false)
   const [busy, setBusy] = useState(false)
   const { themed, list: suggestions } = useMemo(() => buildSuggestions(items), [items])
 
@@ -98,7 +104,7 @@ export default function ChatSort({
             </p>
             {!live && (
               <p className="mb-3 rounded-xl border border-peach/30 bg-peach/5 p-3 text-peach">
-                Chat sorting needs Live AI. Sign in to your ClipRename account in Settings.
+                Sign in to your ClipRename account (Settings) to use chat sorting.
               </p>
             )}
             <div className="space-y-2">
@@ -134,7 +140,7 @@ export default function ChatSort({
 
               {m.plan && !m.plan.possible && (
                 <div className="mt-2 rounded-xl border border-peach/30 bg-peach/5 p-2.5 text-peach">
-                  <div className="font-medium">This prompt won’t work here.</div>
+                  <div className="font-medium">I can’t do that with these files.</div>
                   {m.plan.reason && <div className="mt-1 text-peach/90">{m.plan.reason}</div>}
                   <button
                     onClick={onOpenSupport}
@@ -151,12 +157,17 @@ export default function ChatSort({
                   <div className="text-muted">{opt.description}</div>
                   <div className="mt-1.5 text-xs text-faint">{summarize(opt)}</div>
                   <button
-                    onClick={() => onApplyOption(opt)}
-                    disabled={applying}
+                    onClick={() => {
+                      void onApplyOption(opt).then((ok) => ok && setAppliedOnce(true))
+                    }}
+                    disabled={applying || appliedOnce}
                     className="btn-primary mt-2.5 !py-1.5 !px-3 text-xs"
                   >
-                    {applying ? 'Working…' : 'Apply this layout'}
+                    {applying ? 'Working…' : appliedOnce ? 'Applied' : 'Apply this layout'}
                   </button>
+                  <div className="mt-1.5 text-[11px] text-faint">
+                    Files will be {applyMode === 'move' ? 'moved' : 'copied'} — you can undo right after.
+                  </div>
                 </div>
               ))}
             </div>
@@ -177,7 +188,7 @@ export default function ChatSort({
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && send(input)}
           disabled={!live}
-          placeholder={live ? 'e.g. put all drone shots in an aerial folder' : 'Switch to Live AI to chat'}
+          placeholder={live ? 'e.g. put all drone shots in an aerial folder' : 'Sign in to start sorting'}
           className="field"
         />
         <button onClick={() => send(input)} disabled={busy || !live} className="btn-primary">

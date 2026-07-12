@@ -2,20 +2,14 @@
 
 ## Supported Versions
 
-Use this section to tell people about which versions of your project are
-currently being supported with security updates.
-
-| Version | Supported          |
-| ------- | ------------------ |
-| 5.1.x   | :white_check_mark: |
-| 5.0.x   | :x:                |
-| 4.0.x   | :white_check_mark: |
-| < 4.0   | :x:                |
+Only the [latest release](https://github.com/trysky1/Cliprename-desktop-public/releases/latest)
+is supported. The app updates itself in-app (**Settings → Check for updates**), so
+please make sure you are on the latest version before reporting.
 
 ## Reporting a Vulnerability
 
-Use this section to tell people how to report a vulnerability.
+Please report vulnerabilities **privately** via GitHub's
+["Report a vulnerability"](https://github.com/trysky1/Cliprename-desktop-public/security/advisories/new)
+form. **Do not open a public issue** for security problems.
 
-Tell them where to go, how often they can expect to get an update on a
-reported vulnerability, what to expect if the vulnerability is accepted or
-declined, etc.
+We will acknowledge your report within 7 days.

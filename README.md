@@ -1,79 +1,77 @@
 # ClipRename Desktop
 
-Point it at a local editing folder → it sorts **video / audio / images**, gives them clean
-AI-suggested names, and lays everything out **drag-and-drop ready for your NLE**. Companion to
-[cliprename.com](https://cliprename.com).
+AI file sorting and renaming for video editors. Point ClipRename at a local editing
+folder and it sorts your video, audio, and images, gives every clip a clean
+AI-suggested name, and stages the results drag-and-drop ready for your NLE
+(Premiere, After Effects, DaVinci Resolve). It's the desktop companion to
+[cliprename.com](https://cliprename.com) — same account, same plan, same AI credits.
 
-## Quick start
+## Download
+
+Get the latest installer from the
+[releases page](https://github.com/trysky1/Cliprename-desktop-public/releases/latest):
+
+| Your machine | Download |
+|---|---|
+| Windows PC | `ClipRename-<version>-setup.exe` |
+| Mac with Apple Silicon (M1/M2/M3/M4) | `ClipRename-<version>-arm64.dmg` |
+| Mac with Intel | `ClipRename-<version>-x64.dmg` |
+
+The app updates itself: once installed, use **Settings → Check for updates** to get
+new versions.
+
+### Windows install
+
+Run the `.exe`. SmartScreen may show "Windows protected your PC" — the build isn't
+code-signed yet, so Windows can't verify the publisher. Click **More info → Run
+anyway** and follow the installer.
+
+### macOS install
+
+Open the `.dmg` and drag ClipRename to Applications. Because the build isn't
+Apple-notarized yet, macOS may claim the app "is damaged" — it isn't. Right-click
+**Fix ClipRename.command** in the `.dmg` window and choose **Open** to clear the
+block, or follow the `HOW TO INSTALL` text file that ships next to the download.
+
+## What you need
+
+A free [cliprename.com](https://cliprename.com) account. The app is behind a
+sign-in gate and uses your account's AI credits — there are no API keys to manage.
+
+## How it works & privacy
+
+- **Your files never leave your machine.** ClipRename extracts small samples
+  locally with bundled ffmpeg — a few video keyframes, a downscaled image, or a
+  short audio excerpt — and sends only those samples to cliprename.com's servers
+  for AI analysis.
+- **Copy is the default.** Originals stay untouched; toggle Move if you want it.
+- **Nothing changes until you press Apply**, and **Undo** reverses the last batch.
+
+See the [privacy policy](https://cliprename.com/privacy) and
+[terms of service](https://cliprename.com/terms).
+
+## Support
+
+- Help center: [cliprename.com/support](https://cliprename.com/support)
+- Bugs and feature requests:
+  [GitHub Issues](https://github.com/trysky1/Cliprename-desktop-public/issues)
+
+## Building from source
+
+Requires Node 22+.
 
 ```bash
 npm install
-npm run dev        # launches the Electron app with hot reload
+npm run dev          # run the app with hot reload
+npm run build:win    # Windows installer  → release/
+npm run build:mac    # macOS dmg + zip    → release/ (build on a Mac)
 ```
 
-The app opens in **Sandbox mode** by default — it fakes AI names so you can test the whole flow
-(scan → preview → apply → undo) with **no API key and no login**.
+CI (GitHub Actions) builds and publishes releases automatically on `v*` tags.
 
-## Real AI naming (optional, cheap)
+## License
 
-1. Get a free **Gemini** key at https://aistudio.google.com/app/apikey
-2. Settings ⚙ → paste the key → turn **Sandbox** off (Live AI).
-3. Click **Analyze with AI**. Video keyframes / images / short audio clips are extracted locally
-   with bundled ffmpeg and sent to Gemini Flash (pennies at scale).
-
-## AI Chat Sorting
-
-The right-hand panel: describe how you want files sorted in plain English. The AI proposes a
-folder plan (with alternatives), applies it on approval, and tells you when a request isn't
-possible. Requires Live AI (a Gemini key).
-
-## Safety
-
-- **Copy** mode by default (originals untouched). Toggle **Move** in the preview.
-- Nothing changes until you press **Apply** in the preview.
-- **Undo last** reverses the most recent batch. Never overwrites — duplicates get `-1`, `-2`…
-
-## Download a build (Windows & macOS)
-
-Separate installers are produced for each platform — grab the one for your machine:
-
-| Your machine | File | Artifact |
-|---|---|---|
-| **Windows PC** | `ClipRename-<version>-setup.exe` | `ClipRename-Windows` |
-| **Mac with Apple Silicon** (M1/M2/M3/M4) | `ClipRename-<version>-arm64.dmg` | `ClipRename-macOS-AppleSilicon` |
-
-The installers are built by GitHub Actions. Go to the repo's **Actions** tab → the
-latest **Build installers** run → download the artifact for your platform. You can
-start a build yourself from that tab via **Run workflow**, or by pushing a `v*` tag.
-
-> **Intel Macs:** CI builds Apple Silicon only (every MacBook since late 2020 is
-> Apple Silicon, and Intel runners are scarce). To produce an Intel `.dmg`, add a
-> `macos-13` entry to the matrix in `.github/workflows/build.yml`, or build it on an
-> Intel Mac with `npm run build:mac:x64`.
-
-### First launch on macOS (unsigned build)
-
-The Mac build isn't notarized with an Apple Developer certificate yet, so Gatekeeper
-blocks it the first time. Open it once with either:
-
-- **Right-click** the app → **Open** → **Open** in the dialog, **or**
-- in Terminal: `xattr -cr /Applications/ClipRename.app` then open it normally.
-
-After that it launches like any other app.
-
-## Build the installers yourself
-
-Each platform must be built **on that platform** (the bundled ffmpeg is
-CPU-specific, and only macOS can produce a `.dmg`):
-
-```bash
-npm run build:win        # Windows  → release/ClipRename-<version>-setup.exe
-npm run build:mac        # macOS, current CPU → release/*.dmg + *.zip
-npm run build:mac:arm64  # macOS, force Apple Silicon
-npm run build:mac:x64    # macOS, force Intel
-```
-
-## Roadmap — connect to cliprename.com
-
-Shared Google login, usage quota, and the same Stripe billing (via the existing site). Needs the
-site's Supabase URL + anon key and the billing page URL. Until then the app runs in local mode.
+Source-available, proprietary. See [LICENSE](LICENSE) — you may read the code and
+build it for personal, non-commercial use; official builds are distributed only via
+the [releases page](https://github.com/trysky1/Cliprename-desktop-public/releases)
+and [cliprename.com](https://cliprename.com).
