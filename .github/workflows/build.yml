@@ -33,7 +33,17 @@ jobs:
       - name: Create the release (installers attach as each build finishes)
         run: |
           cat > notes.md <<'MD'
+          AI file sorting and renaming for video editors — the desktop companion to [cliprename.com](https://cliprename.com).
+
           ## Install
+
+          | Your machine | Download |
+          |---|---|
+          | Windows PC | `ClipRename-<version>-setup.exe` |
+          | Mac with Apple Silicon (M1/M2/M3/M4) | `ClipRename-<version>-arm64.dmg` |
+          | Mac with Intel | `ClipRename-<version>-x64.dmg` |
+
+          ## First-launch warnings (unsigned build)
 
           **Windows** — download the `.exe`, run it. If SmartScreen says
           "Windows protected your PC": click **More info → Run anyway**

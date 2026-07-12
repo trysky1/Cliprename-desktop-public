@@ -36,7 +36,7 @@ export default function Header({
             className={`chip !py-1 text-[11px] ${creditsLeft <= 0 ? '!border-peach/40 !text-peach' : ''}`}
             title="AI credits left today — click for usage details and plans"
           >
-            {creditsLeft <= 0 ? 'No credits left today' : `${creditsLeft} credits today`}
+            {creditsLeft <= 0 ? 'Out of AI names — tap to upgrade' : `${creditsLeft} AI names left today`}
           </button>
         )}
         <button

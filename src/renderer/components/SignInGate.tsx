@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import logo from '../assets/logo.png'
+import { friendlyAuthError } from '../lib/authError'
 
 interface CloudState {
   signedIn: boolean
@@ -51,7 +52,7 @@ export default function SignInGate({ onSignedIn }: Props): React.ReactElement {
       const s = await window.api.cloudSignInGoogle()
       if (s.signedIn) onSignedIn(s)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(friendlyAuthError(e))
     } finally {
       setBusy(false)
     }
@@ -68,7 +69,7 @@ export default function SignInGate({ onSignedIn }: Props): React.ReactElement {
       const s = await window.api.cloudSignIn(email.trim(), password)
       if (s.signedIn) onSignedIn(s)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(friendlyAuthError(e))
     } finally {
       setBusy(false)
     }
@@ -108,6 +109,7 @@ export default function SignInGate({ onSignedIn }: Props): React.ReactElement {
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && doSignIn()}
             placeholder="Email"
             autoComplete="email"
             className="field"
@@ -137,6 +139,24 @@ export default function SignInGate({ onSignedIn }: Props): React.ReactElement {
           <div className="text-[10px] leading-relaxed text-faint">
             If you joined with Google, use the Google button — email sign-in only works for
             accounts with a password.
+          </div>
+          <div className="text-[10px] leading-relaxed text-faint">
+            By signing in you agree to ClipRename’s{' '}
+            <button
+              onClick={() => window.api.openExternal('https://cliprename.com/terms')}
+              className="underline hover:text-muted"
+            >
+              Terms
+            </button>{' '}
+            and{' '}
+            <button
+              onClick={() => window.api.openExternal('https://cliprename.com/privacy')}
+              className="underline hover:text-muted"
+            >
+              Privacy Policy
+            </button>
+            . To generate names, small media samples (a few video frames, a downscaled image, or a
+            short audio excerpt) are sent to ClipRename’s servers for AI analysis.
           </div>
         </div>
       </div>

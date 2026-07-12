@@ -174,7 +174,7 @@ export default function LibraryPanel(): React.ReactElement {
             {dupes && (
               <span className="text-xs text-faint">
                 {dupes.length} duplicate {dupes.length === 1 ? 'set' : 'sets'} ·{' '}
-                <span className="text-peach">{formatBytes(wastedTotal)}</span> recoverable
+                <span className="text-peach">{formatBytes(wastedTotal)}</span> could be freed if you delete the extra copies yourself
               </span>
             )}
           </div>
@@ -185,7 +185,7 @@ export default function LibraryPanel(): React.ReactElement {
               {dupes.map((g) => (
                 <div key={g.hash} className="rounded-xl border border-borderSoft bg-surface2/60 p-3">
                   <div className="mb-2 text-[11px] text-faint">
-                    {g.entries.length} copies · {formatBytes(g.wastedBytes)} wasted
+                    {g.entries.length} copies · {formatBytes(g.wastedBytes)} of duplicates
                   </div>
                   <div className="space-y-1.5">
                     {g.entries.map((e, i) => (
@@ -209,7 +209,7 @@ export default function LibraryPanel(): React.ReactElement {
                         </button>
                         {i > 0 && (
                           <button onClick={() => removeEntry(e.id)} className="btn !py-1 !px-2 text-[11px]">
-                            Remove from list
+                            Forget
                           </button>
                         )}
                       </div>

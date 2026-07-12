@@ -40,7 +40,7 @@ export default function ActionToggle({ on, onChange, live }: Props): React.React
         <span className="block text-[11px] leading-snug text-faint">
           Reads several moments across each video to name the main action — e.g. “bicycle kick”,
           “flipping pancakes”.
-          {!live && ' Sign in to your ClipRename account (Settings) to actually watch the video.'}
+          {!live && ' Sign in to turn this on.'}
         </span>
       </span>
     </button>

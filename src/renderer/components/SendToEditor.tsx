@@ -101,7 +101,7 @@ export default function SendToEditor({ items, actionNaming }: Props): React.Reac
       {done && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-mint/30 bg-mint/5 px-4 py-3 text-[12px] text-muted">
           <span>
-            Wrote a project with <b className="text-mint">{done.count}</b> clips. Open it from your
+            Saved a project file with <b className="text-mint">{done.count}</b> clips. Open it from your
             editor’s <span className="font-mono">File → Import</span>.
           </span>
           <button onClick={() => window.api.reveal(done.path)} className="btn !py-1 !px-2 text-[11px]">

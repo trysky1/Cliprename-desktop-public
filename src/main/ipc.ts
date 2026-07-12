@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { existsSync, promises as fsp } from 'fs'
 import { DRAG_ICON_B64 } from './dragicon'
 import {
@@ -45,6 +45,7 @@ import {
   undoJournal
 } from './files'
 import {
+  audioRange,
   autoClip,
   detectBeats,
   editImage,
@@ -52,6 +53,7 @@ import {
   extractFrames,
   extractKeyframe,
   filmstrip,
+  frameAt,
   getMediaInfo,
   isFfmpegAvailable,
   makeThumbnail,
@@ -102,6 +104,7 @@ async function mediaForItem(item: MediaItem): Promise<MediaPart | null> {
 }
 
 export function registerIpc(): void {
+  ipcMain.handle('app:version', () => app.getVersion())
   ipcMain.handle('settings:get', () => getSettings())
   ipcMain.handle('settings:set', (_e, patch) => setSettings(patch))
 
@@ -254,8 +257,28 @@ export function registerIpc(): void {
         throw new Error('Sign in to your ClipRename account to use AI naming.')
       }
       try {
-        const media =
-          item.kind === 'video' ? await extractFrames(item.path, 5) : await mediaForItem(item)
+        // Honour the selected range: the user pays 1 credit to name the PART
+        // they trimmed, so sample inside [startSec, endSec] when one is given.
+        const hasRange =
+          typeof startSec === 'number' &&
+          typeof endSec === 'number' &&
+          isFinite(startSec) &&
+          isFinite(endSec) &&
+          endSec > startSec
+        let media: MediaPart[] | MediaPart | null
+        if (hasRange && item.kind === 'video') {
+          const n = 5
+          const step = (endSec - startSec) / (n + 1)
+          const frames = await Promise.all(
+            Array.from({ length: n }, (_, i) => frameAt(item.path, startSec + step * (i + 1)))
+          )
+          const got = frames.filter((f): f is MediaPart => !!f)
+          media = got.length ? got : await extractFrames(item.path, 5)
+        } else if (hasRange && item.kind === 'audio') {
+          media = (await audioRange(item.path, startSec, endSec - startSec)) ?? (await mediaForItem(item))
+        } else {
+          media = item.kind === 'video' ? await extractFrames(item.path, 5) : await mediaForItem(item)
+        }
         const r = await suggestNameCloud(item, media, { ignoreFilename: generic, metaTitle })
         // Same style pass as the batch flow, so the editor's single-clip rename
         // respects the naming-style setting too.

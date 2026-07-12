@@ -27,6 +27,7 @@ import {
 } from '../shared/types'
 
 const api = {
+  appVersion: (): Promise<string> => ipcRenderer.invoke('app:version'),
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke('settings:get'),
   setSettings: (patch: Partial<AppSettings>): Promise<AppSettings> =>
     ipcRenderer.invoke('settings:set', patch),
@@ -98,9 +99,9 @@ const api = {
     ipcRenderer.invoke('media:beats', p),
   saveMarkers: (baseName: string, beats: number[], bpm: number): Promise<{ folder: string }> =>
     ipcRenderer.invoke('clip:saveMarkers', baseName, beats, bpm),
-  stageClip: (req: StageRequest): Promise<{ stagedPath: string }> =>
+  stageClip: (req: StageRequest): Promise<{ stagedPath: string; fallback?: boolean }> =>
     ipcRenderer.invoke('clip:stage', req),
-  editImage: (req: EditImageRequest): Promise<{ stagedPath: string }> =>
+  editImage: (req: EditImageRequest): Promise<{ stagedPath: string; fallback?: boolean }> =>
     ipcRenderer.invoke('clip:editImage', req),
   removeStaged: (p: string): Promise<void> => ipcRenderer.invoke('clip:removeStaged', p),
   revealTray: (): Promise<string> => ipcRenderer.invoke('tray:reveal'),

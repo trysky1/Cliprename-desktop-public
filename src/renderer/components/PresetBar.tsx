@@ -67,7 +67,7 @@ export default function PresetBar({ settings, onApply }: Props): React.ReactElem
           </button>
           <button
             onClick={() => remove(p.id)}
-            className="ml-0.5 text-faint opacity-0 transition-opacity group-hover:opacity-100"
+            className="ml-0.5 text-faint opacity-60 transition-opacity group-hover:opacity-100"
             title="Delete preset"
           >
             ✕

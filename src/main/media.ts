@@ -482,10 +482,16 @@ const SESSION_LABEL = (() => {
   return `ClipRename ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}${p(d.getMinutes())}`
 })()
 
+// Every staging dir handed out this session — removeStaged checks against all
+// of them so changing the tray folder can't orphan already-staged clips.
+const sessionStagingDirs = new Set<string>()
+
 export function stagingDir(): string {
   const chosen = getSettings().trayDir?.trim()
   const base = chosen || path.join(app.getPath('userData'), 'ClipRename Tray')
-  return path.join(base, SESSION_LABEL)
+  const dir = path.join(base, SESSION_LABEL)
+  sessionStagingDirs.add(dir)
+  return dir
 }
 
 function sanitizeName(s: string): string {
@@ -599,7 +605,7 @@ export interface StageReq {
 
 // Produce a renamed (and optionally trimmed) real file in the staging folder,
 // ready to be dragged into an editor.
-export async function stageClip(req: StageReq): Promise<{ stagedPath: string }> {
+export async function stageClip(req: StageReq): Promise<{ stagedPath: string; fallback?: boolean }> {
   const dir = stagingDir()
   const name = sanitizeName(req.baseName)
   const out = await uniqueIn(dir, name, req.ext)
@@ -610,7 +616,8 @@ export async function stageClip(req: StageReq): Promise<{ stagedPath: string }> 
 
   if (req.kind === 'image' || !hasRange || !ensureFfmpeg()) {
     await fs.copyFile(req.srcPath, out)
-    return { stagedPath: out }
+    // A requested trim that couldn't run (no ffmpeg) is a fallback, not success.
+    return { stagedPath: out, fallback: hasRange && req.kind !== 'image' }
   }
 
   const duration = (req.endSec as number) - (req.startSec as number)
@@ -621,6 +628,7 @@ export async function stageClip(req: StageReq): Promise<{ stagedPath: string }> 
     req.kind === 'video'
       ? ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-avoid_negative_ts', 'make_zero']
       : ['-c', 'copy', '-avoid_negative_ts', 'make_zero']
+  let fallback = false
   await new Promise<void>((resolve, reject) => {
     ffmpeg(req.srcPath)
       .seekInput(req.startSec as number)
@@ -630,10 +638,12 @@ export async function stageClip(req: StageReq): Promise<{ stagedPath: string }> 
       .on('end', () => resolve())
       .save(out)
   }).catch(async () => {
-    // If the trim fails (odd container/codec), fall back to copying the whole file.
+    // If the trim fails (odd container/codec), fall back to copying the whole
+    // file — and SAY so, or the UI would label an untrimmed file "Trimmed".
+    fallback = true
     await fs.copyFile(req.srcPath, out).catch(() => {})
   })
-  return { stagedPath: out }
+  return { stagedPath: out, fallback }
 }
 
 export interface EditImageReq {
@@ -646,16 +656,17 @@ export interface EditImageReq {
 }
 
 // Apply crop / rotate / flip to an image and stage the result.
-export async function editImage(req: EditImageReq): Promise<{ stagedPath: string }> {
+export async function editImage(req: EditImageReq): Promise<{ stagedPath: string; fallback?: boolean }> {
   const dir = stagingDir()
   const name = sanitizeName(req.baseName)
   const out = await uniqueIn(dir, name, req.ext || 'png')
 
   if (!ensureFfmpeg()) {
     await fs.copyFile(req.srcPath, out).catch(() => {})
-    return { stagedPath: out }
+    return { stagedPath: out, fallback: true }
   }
 
+  let fallback = false
   const filters: string[] = []
   if (req.crop && req.crop.w > 1 && req.crop.h > 1) {
     const c = req.crop
@@ -676,14 +687,22 @@ export async function editImage(req: EditImageReq): Promise<{ stagedPath: string
       .on('end', () => resolve())
       .save(out)
   }).catch(async () => {
+    fallback = true
     await fs.copyFile(req.srcPath, out).catch(() => {})
   })
-  return { stagedPath: out }
+  return { stagedPath: out, fallback }
 }
 
 export async function removeStaged(p: string): Promise<void> {
-  if (path.resolve(p).startsWith(path.resolve(stagingDir()))) {
-    await fs.unlink(p).catch(() => {})
+  // Accept paths under ANY staging dir used this session — after the user
+  // changes the tray folder, clips staged under the old one must still be
+  // removable (otherwise Remove/Clear silently leave files on disk).
+  const target = path.resolve(p)
+  for (const d of sessionStagingDirs) {
+    if (target.startsWith(path.resolve(d) + path.sep)) {
+      await fs.unlink(p).catch(() => {})
+      return
+    }
   }
 }
 
@@ -845,6 +864,9 @@ export async function splitScenes(
   const minScene = Math.max(0.3, opts.minSceneSec ?? 1)
 
   const cuts = await detectScenes(filePath, opts.threshold ?? 0.4)
+  // No detectable cuts: return empty so the UI can say "no scene cuts found"
+  // instead of duplicating the whole video as a single "scene-01" clip.
+  if (cuts.length === 0) return { outputDir: '', clips: [] }
   // Turn cut points into [start,end] segments, dropping any too-short sliver.
   const boundaries = [0]
   for (const t of cuts) {

@@ -1,3 +1,4 @@
+import { useEscape } from '../lib/useEscape'
 import React, { useEffect, useRef, useState } from 'react'
 import { TrayItem } from '../../shared/types'
 
@@ -103,9 +104,13 @@ export default function Tray({
 }: Props): React.ReactElement | null {
   const [folder, setFolder] = useState('')
 
+  useEscape(onClose)
+
+  // Refetch on trayDir change too — after "Change", the session folder moves
+  // and dragging the old one would miss everything staged afterwards.
   useEffect(() => {
     if (open) window.api.trayFolder().then(setFolder)
-  }, [open])
+  }, [open, trayDir])
 
   if (!open) return null
 
@@ -117,10 +122,14 @@ export default function Tray({
   }
 
   const allPaths = items.map((i) => i.stagedPath)
-  // Drag the whole session folder so it imports as a single bin (Premiere/AE).
+  // Drag the whole session folder so it imports as a single bin (Premiere/AE) —
+  // unless some clips were staged under an older folder (tray dir changed
+  // mid-session), in which case drag the files themselves so nothing is missed.
+  const sep = folder.includes('\\') ? '\\' : '/'
+  const allInFolder = folder && allPaths.every((p) => p.startsWith(folder + sep))
   const dragAll = (e: React.DragEvent): void => {
     e.preventDefault()
-    window.api.startDrag(folder ? [folder] : allPaths)
+    window.api.startDrag(allInFolder ? [folder] : allPaths)
   }
 
   return (
@@ -193,7 +202,7 @@ export default function Tray({
                   <button
                     onClick={() => onRemove(it.id)}
                     title="Remove from tray"
-                    className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-faint opacity-0 transition-all hover:bg-peach/10 hover:text-peach group-hover:opacity-100"
+                    className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-faint opacity-60 transition-all hover:bg-peach/10 hover:text-peach group-hover:opacity-100"
                   >
                     ✕
                   </button>

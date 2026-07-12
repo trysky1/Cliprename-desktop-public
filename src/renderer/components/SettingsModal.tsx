@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import { UpdateCheckResult } from '../../shared/types'
 import { IconUser } from './Icons'
+import { friendlyAuthError } from '../lib/authError'
+import { useEscape } from '../lib/useEscape'
 
 interface Props {
   ffmpegOk: boolean
@@ -230,6 +232,8 @@ export default function SettingsModal({
   const [loginPassword, setLoginPassword] = useState('')
   const [authBusy, setAuthBusy] = useState(false)
   const [authError, setAuthError] = useState('')
+  const [appVersion, setAppVersion] = useState('')
+  useEscape(onClose)
   const [usage, setUsage] = useState<{
     daily: number
     dailyLimit: number
@@ -245,6 +249,7 @@ export default function SettingsModal({
   }
 
   useEffect(() => {
+    window.api.appVersion().then(setAppVersion).catch(() => {})
     window.api
       .cloudStatus()
       .then((s) => {
@@ -281,7 +286,7 @@ export default function SettingsModal({
       if (s.signedIn) loadUsage()
       setLoginPassword('')
     } catch (e) {
-      setAuthError(e instanceof Error ? e.message : String(e))
+      setAuthError(friendlyAuthError(e))
     } finally {
       setAuthBusy(false)
     }
@@ -403,6 +408,7 @@ export default function SettingsModal({
                   type="email"
                   value={loginEmail}
                   onChange={(e) => setLoginEmail(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && doSignIn()}
                   placeholder="Email"
                   autoComplete="email"
                   className="field"
@@ -442,7 +448,7 @@ export default function SettingsModal({
             <div>
               Reading inside videos &amp; audio:{' '}
               <span className={ffmpegOk ? 'text-mint' : 'text-peach'}>
-                {ffmpegOk ? 'ready' : 'unavailable — names will be based on the old filename'}
+                {ffmpegOk ? 'ready' : 'unavailable — names will be based on the old filename. Reinstalling ClipRename usually fixes this.'}
               </span>
             </div>
             <div className="mt-1 text-faint">
@@ -452,7 +458,10 @@ export default function SettingsModal({
           </div>
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-borderSoft px-6 py-4">
+        <div className="flex items-center justify-between gap-2 border-t border-borderSoft px-6 py-4">
+          <span className="text-[11px] text-faint">
+            {appVersion ? `ClipRename v${appVersion}` : ''}
+          </span>
           <button onClick={onClose} className="btn-primary">
             Done
           </button>

@@ -133,14 +133,14 @@ function Row({
       <button
         onClick={() => onAddToTray(item)}
         title="Add to tray (drag into your editor later)"
-        className="shrink-0 rounded-lg border border-borderSoft px-2 py-1 text-[11px] text-muted opacity-0 transition-all hover:border-mint/50 hover:text-mint group-hover:opacity-100"
+        className="shrink-0 rounded-lg border border-borderSoft px-2 py-1 text-[11px] text-muted opacity-60 transition-all hover:border-mint/50 hover:text-mint group-hover:opacity-100"
       >
         Add to tray
       </button>
       <button
         onClick={() => onRemove(item.id)}
         title="Remove this file from the list"
-        className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-faint opacity-0 transition-all hover:bg-peach/10 hover:text-peach group-hover:opacity-100"
+        className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-faint opacity-60 transition-all hover:bg-peach/10 hover:text-peach group-hover:opacity-100"
       >
         ✕
       </button>

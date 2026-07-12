@@ -92,6 +92,13 @@ app.whenReady().then(() => {
     }
   })
 
+  // Native About panel (macOS "ClipRename → About") shows version + website.
+  app.setAboutPanelOptions({
+    applicationName: 'ClipRename',
+    applicationVersion: app.getVersion(),
+    website: 'https://cliprename.com'
+  })
+
   registerIpc()
   registerUpdater()
   createWindow()

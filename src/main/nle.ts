@@ -27,12 +27,19 @@ function xml(s: string): string {
     .replace(/"/g, '&quot;')
 }
 
-// Absolute path -> RFC-8089 file URL. Handles Windows drive letters and spaces
-// without mangling the drive colon (encodeURI keeps ':' and '/').
+// Absolute path -> RFC-8089 file URL. Percent-encodes each path segment
+// (encodeURI would leave '#' and '?' alone, truncating the URL in the editor)
+// while keeping the slashes and a Windows drive segment like "C:" intact.
 export function fileUrl(p: string): string {
   let abs = path.resolve(p).replace(/\\/g, '/')
   if (!abs.startsWith('/')) abs = '/' + abs // C:/… -> /C:/…
-  return encodeURI('file://' + abs)
+  return (
+    'file://' +
+    abs
+      .split('/')
+      .map((seg) => (/^[A-Za-z]:$/.test(seg) ? seg : encodeURIComponent(seg)))
+      .join('/')
+  )
 }
 
 // Whole frames at a 30 fps timebase (FCPXML wants rational time like "1800/30s").

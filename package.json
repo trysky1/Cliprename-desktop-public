@@ -1,8 +1,13 @@
 {
   "name": "cliprename-desktop",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "ClipRename Desktop — point it at your editing folder, AI-sort and rename media, drag-and-drop ready for your NLE.",
   "author": "ClipRename",
+  "license": "SEE LICENSE IN LICENSE",
+  "homepage": "https://cliprename.com",
+  "bugs": {
+    "url": "https://github.com/trysky1/Cliprename-desktop-public/issues"
+  },
   "repository": "github:trysky1/Cliprename-desktop-public",
   "main": "./out/main/index.js",
   "type": "module",

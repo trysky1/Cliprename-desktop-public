@@ -1,5 +1,6 @@
 import React from 'react'
 import { IconBot, IconScissors, IconSparkles } from './Icons'
+import { useEscape } from '../lib/useEscape'
 
 interface Props {
   onPick: (mode: 'auto' | 'clip' | 'agent') => void
@@ -9,6 +10,7 @@ interface Props {
 // First-run welcome: explains the three workflows in plain language and lets
 // the user jump straight into one. Shown once (settings.welcomed).
 export default function Welcome({ onPick, onDismiss }: Props): React.ReactElement {
+  useEscape(onDismiss)
   return (
     <div className="fixed inset-0 z-40 grid place-items-center bg-black/60 p-4 backdrop-blur-sm">
       <div className="card w-full max-w-2xl space-y-5 p-7">
@@ -29,13 +31,13 @@ export default function Welcome({ onPick, onDismiss }: Props): React.ReactElemen
           />
           <WorkflowCard
             icon={<IconScissors size={20} />}
-            title="Clipping"
+            title="Trim clips"
             desc="Trim clips to the good part and drag them straight into Premiere, AE, or DaVinci."
             onClick={() => onPick('clip')}
           />
           <WorkflowCard
             icon={<IconBot size={20} />}
-            title="Folder Agent"
+            title="Automate a folder"
             desc="Point it at a folder — it renames (and can sort) the videos and audio in it for you."
             onClick={() => onPick('agent')}
           />

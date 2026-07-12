@@ -157,7 +157,7 @@ export default function ImageEditor({ item, onAddEdited, onCreditUsed }: Props):
           />
           <span className="text-xs text-faint">.{item.ext}</span>
           <button onClick={aiRename} disabled={renaming} className="btn whitespace-nowrap !py-2 text-xs">
-            {renaming ? 'Naming…' : 'Rename with AI'}
+            {renaming ? 'Naming…' : 'Suggest a name (1 credit)'}
           </button>
         </div>
         {renameNote && <div className="mt-1 text-[11px] text-peach">{renameNote}</div>}

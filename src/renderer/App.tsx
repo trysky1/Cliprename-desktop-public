@@ -52,7 +52,7 @@ export default function App(): React.ReactElement {
   const [showPreview, setShowPreview] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [showLibrary, setShowLibrary] = useState(false)
-  const [lastJournal, setLastJournal] = useState<{ id: string; count: number } | null>(null)
+  const [lastJournal, setLastJournal] = useState<{ id: string; count: number; mode?: ApplyMode } | null>(null)
   const [status, setStatus] = useState<{ text: string; tone: 'ok' | 'err' | 'info' } | null>(null)
   const [thumbs, setThumbs] = useState<Record<string, string>>({})
   const [tray, setTray] = useState<TrayItem[]>([])
@@ -68,6 +68,17 @@ export default function App(): React.ReactElement {
   const [cloudLoaded, setCloudLoaded] = useState(false)
   // Remaining AI credits today (plan allowance minus usage) for the header chip.
   const [creditsLeft, setCreditsLeft] = useState<number | null>(null)
+
+  // Escape closes whichever overlay is open (library first, then tray).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      setShowLibrary(false)
+      setShowTray(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   function refreshCredits(): void {
     window.api
@@ -248,6 +259,9 @@ export default function App(): React.ReactElement {
         startSec: range?.start,
         endSec: range?.end
       })
+      // If ffmpeg couldn't trim, the untouched original was staged instead —
+      // never label that "Trimmed", and tell the user what actually happened.
+      const trimWorked = !!range && !res.fallback
       setTray((prev) => [
         ...prev,
         {
@@ -255,26 +269,34 @@ export default function App(): React.ReactElement {
           label: `${baseName}.${item.ext}`,
           stagedPath: res.stagedPath,
           kind: item.kind,
-          trimmed: !!range
+          trimmed: trimWorked
         }
       ])
-      flash(range ? 'Trimmed clip added to tray' : 'Added to tray', 'ok')
+      if (range && res.fallback)
+        flash('Couldn’t trim this clip — the full, untrimmed file was added to the tray instead', 'err')
+      else flash(range ? 'Trimmed clip added to tray' : 'Added to tray', 'ok')
     } catch (e) {
       flash(e instanceof Error ? e.message : String(e), 'err')
     }
   }
 
   // Register already-staged files (scene split / auto clipper output) as tray items.
+  // Kind is inferred from the extension so audio auto-clips get the audio
+  // preview instead of a black <video> box.
   function addStagedToTray(clips: { path: string }[]): void {
+    const AUDIO_EXTS = new Set(['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'wma', 'aiff', 'aif'])
     setTray((prev) => [
       ...prev,
-      ...clips.map((c) => ({
-        id: 'tr' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
-        label: c.path.split(/[\\/]/).pop() || 'clip',
-        stagedPath: c.path,
-        kind: 'video' as const,
-        trimmed: true
-      }))
+      ...clips.map((c) => {
+        const ext = (c.path.split('.').pop() || '').toLowerCase()
+        return {
+          id: 'tr' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+          label: c.path.split(/[\\/]/).pop() || 'clip',
+          stagedPath: c.path,
+          kind: (AUDIO_EXTS.has(ext) ? 'audio' : 'video') as 'video' | 'audio',
+          trimmed: true
+        }
+      })
     ])
   }
 
@@ -305,6 +327,7 @@ export default function App(): React.ReactElement {
         rotate: edits.rotate,
         flipH: edits.flipH
       })
+      const editWorked = !!(edits.crop || edits.rotate || edits.flipH) && !res.fallback
       setTray((prev) => [
         ...prev,
         {
@@ -312,10 +335,12 @@ export default function App(): React.ReactElement {
           label: `${baseName}.${item.ext}`,
           stagedPath: res.stagedPath,
           kind: item.kind,
-          trimmed: !!(edits.crop || edits.rotate || edits.flipH)
+          trimmed: editWorked
         }
       ])
-      flash('Edited image added to tray', 'ok')
+      if (res.fallback && (edits.crop || edits.rotate || edits.flipH))
+        flash('Couldn’t apply the edits — the original image was added to the tray instead', 'err')
+      else flash('Edited image added to tray', 'ok')
     } catch (e) {
       flash(e instanceof Error ? e.message : String(e), 'err')
     }
@@ -334,9 +359,17 @@ export default function App(): React.ReactElement {
       // Record named files in the searchable library (also powers duplicate detection).
       window.api.libraryAdd(res.items.filter((i) => i.suggestedName)).catch(() => {})
       refreshCredits()
-      flash('All names ready', 'ok')
-      // Names are clean — move on to trimming the clips.
-      setMode('clip')
+      // Honest summary — some files can fail (quota, unreadable file) without
+      // failing the batch. And stay on this tab: jumping away before Step 4
+      // (Apply) left users thinking renaming was done when it hadn't started.
+      const failed = res.items.filter((i) => i.status === 'error')
+      if (failed.length === 0) flash('All names ready — review below, then apply', 'ok')
+      else if (failed.length < res.items.length)
+        flash(
+          `${res.items.length - failed.length} names ready — ${failed.length} couldn’t be named (${failed[0].error ?? 'see the list below'})`,
+          'err'
+        )
+      else flash(`Couldn’t name these files: ${failed[0].error ?? 'try again in a moment'}`, 'err')
     } catch (e) {
       flash(e instanceof Error ? e.message : String(e), 'err')
     } finally {
@@ -359,8 +392,13 @@ export default function App(): React.ReactElement {
       const res = await window.api.apply(queued, { mode, outputDir, organizeByCategory: organize })
       addUsage(res.appliedCount)
       setShowPreview(false)
-      if (res.errors.length) flash(`Done with ${res.errors.length} problems`, 'err')
-      else setLastJournal({ id: res.journalId, count: res.appliedCount })
+      // On partial failure, say WHAT went wrong — "N problems" was a dead end.
+      if (res.errors.length)
+        flash(
+          `Renamed ${res.appliedCount} files — ${res.errors.length} couldn’t be changed (${res.errors[0]?.message ?? 'file may be open in another app'}). Nothing else was touched.`,
+          'err'
+        )
+      else setLastJournal({ id: res.journalId, count: res.appliedCount, mode })
     } catch (e) {
       flash(e instanceof Error ? e.message : String(e), 'err')
     } finally {
@@ -370,9 +408,18 @@ export default function App(): React.ReactElement {
 
   async function undo(): Promise<void> {
     if (!lastJournal) return
-    const res = await window.api.undo(lastJournal.id)
-    setLastJournal(null)
-    flash(`Reversed ${res.undone} files`, res.errors.length ? 'err' : 'ok')
+    try {
+      const res = await window.api.undo(lastJournal.id)
+      setLastJournal(null)
+      flash(
+        res.errors.length
+          ? `Put back ${res.undone} files — ${res.errors.length} couldn’t be undone (they may have been moved since)`
+          : `Undo complete — ${res.undone} files are back where they were`,
+        res.errors.length ? 'err' : 'ok'
+      )
+    } catch (e) {
+      flash(`Couldn’t undo — ${e instanceof Error ? e.message : 'the files may have been moved since'}`, 'err')
+    }
   }
 
   async function planSort(instruction: string): Promise<SortPlan> {
@@ -416,11 +463,11 @@ export default function App(): React.ReactElement {
     return plan
   }
 
-  async function applySortOption(option: SortOption): Promise<void> {
-    if (!scan) return
+  async function applySortOption(option: SortOption): Promise<boolean> {
+    if (!scan) return false
     if (!outputDir) {
-      flash('Pick where to save first (Review & apply).', 'err')
-      return
+      flash('Choose where to save first — open “Review & apply” in step 4 and pick a folder.', 'err')
+      return false
     }
     setApplying(true)
     try {
@@ -430,10 +477,21 @@ export default function App(): React.ReactElement {
         organizeByCategory: false
       })
       addUsage(res.appliedCount)
-      if (res.errors.length) flash(`Done with ${res.errors.length} problems`, 'err')
-      else setLastJournal({ id: res.journalId, count: res.appliedCount })
+      if (res.errors.length) {
+        flash(
+          `Sorted ${res.appliedCount} files — ${res.errors.length} couldn’t be moved (${res.errors[0]?.message ?? 'file may be open in another app'})`,
+          'err'
+        )
+      } else {
+        setLastJournal({ id: res.journalId, count: res.appliedCount, mode: settings.defaultMode })
+      }
+      // The files just moved/copied — refresh the list so old plans can't be
+      // applied against paths that no longer exist.
+      void rescan(sources)
+      return res.errors.length === 0
     } catch (e) {
       flash(e instanceof Error ? e.message : String(e), 'err')
+      return false
     } finally {
       setApplying(false)
     }
@@ -484,7 +542,7 @@ export default function App(): React.ReactElement {
             on={mode === 'clip'}
             onClick={() => setMode('clip')}
             icon={<IconScissors size={15} />}
-            label="Clipping"
+            label="Trim clips"
           />
           <ModeTab
             on={mode === 'automation'}
@@ -675,7 +733,8 @@ export default function App(): React.ReactElement {
                     <div className="section-desc">
                       Describe how you want your {items.length} files organized — e.g. “put drone
                       shots in /aerial” — and apply a folder layout in one click. Each request uses
-                      1 credit.
+                      1 credit, plus 1 credit per file that hasn’t been named yet (so the AI can see
+                      what’s in it).
                     </div>
                   </div>
                   <ChatSort
@@ -684,6 +743,7 @@ export default function App(): React.ReactElement {
                     applying={applying}
                     onPlan={planSort}
                     onApplyOption={applySortOption}
+                    applyMode={settings.defaultMode}
                     onOpenSupport={() => window.api.openExternal(SUPPORT_URL)}
                   />
                 </section>
@@ -740,8 +800,7 @@ export default function App(): React.ReactElement {
 
           {!scan && (mode === 'auto' || mode === 'clip') && (
             <div className="pt-2 text-center text-xs text-faint">
-              Tip: try the included <span className="text-muted">test-footage</span> folder to see how
-              it works.
+              Tip: drag in any folder of clips — nothing is renamed until you review and apply.
             </div>
           )}
         </div>
@@ -881,7 +940,7 @@ interface BottomBarProps {
   busy: boolean
   busyText: string
   status: { text: string; tone: 'ok' | 'err' | 'info' } | null
-  result: { id: string; count: number } | null
+  result: { id: string; count: number; mode?: ApplyMode } | null
   outputDir: string
   onUndo: () => void
   onOpen: () => void
@@ -910,7 +969,15 @@ function BottomBar({
     return (
       <Bar>
         <span className="text-sm text-text">
-          Organized <b>{result.count}</b> files into a tidy copy
+          {result.mode === 'move' ? (
+            <>
+              Moved <b>{result.count}</b> files into their new home
+            </>
+          ) : (
+            <>
+              Made a tidy, renamed copy of <b>{result.count}</b> files
+            </>
+          )}
         </span>
         <div className="ml-auto flex gap-2">
           <button onClick={onOpen} className="btn !py-1.5 text-xs">
