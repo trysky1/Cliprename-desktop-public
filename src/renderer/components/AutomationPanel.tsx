@@ -7,6 +7,7 @@ import {
   WatchHistoryEntry,
   WatchRule
 } from '../../shared/types'
+import MediaThumb from './MediaThumb'
 
 const MODES: { id: AgentMode; label: string; hint: string }[] = [
   { id: 'rename', label: 'Rename in place', hint: 'Rename new files where they land' },
@@ -216,6 +217,13 @@ export default function AutomationPanel(): React.ReactElement {
             </label>
           </div>
 
+          {draftFolder && existingCount === 0 && (
+            <div className="rounded-lg border border-borderSoft bg-surface px-3 py-2.5 text-[12px] text-muted">
+              No clips at the top level of this folder yet — new clips that land here get renamed
+              automatically. <span className="text-faint">Heads-up: clips inside subfolders aren’t
+              watched; move them to the top level if you want them renamed.</span>
+            </div>
+          )}
           {existingCount > 0 && (
             <div className="space-y-1.5 rounded-lg border border-borderSoft bg-surface px-3 py-2.5">
               <label className="flex cursor-pointer items-start gap-2 text-[12px] text-text">
@@ -346,6 +354,12 @@ export default function AutomationPanel(): React.ReactElement {
                         <span className="text-faint">Since:</span> {whenOf(r.createdAt)}
                       </span>
                     </div>
+                    <FolderPreview
+                      folder={r.folder}
+                      ruleId={r.id}
+                      busy={busyRules.has(r.id)}
+                      namedCount={namedCount}
+                    />
                     <div className="mb-1 flex items-center justify-between">
                       <span className="text-[10px] uppercase tracking-wide text-faint">
                         What changed in this folder
@@ -431,6 +445,93 @@ export default function AutomationPanel(): React.ReactElement {
               </div>
             ))}
           </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// What's in the folder RIGHT NOW, with real video/image thumbnails — so the
+// user can see exactly what a rule would rename, and trigger the one-time
+// "name everything already here" pass at any point (not only at rule creation).
+function FolderPreview({
+  folder,
+  ruleId,
+  busy,
+  namedCount
+}: {
+  folder: string
+  ruleId: string
+  busy: boolean
+  namedCount: number
+}): React.ReactElement {
+  const [files, setFiles] = useState<{ path: string; name: string }[]>([])
+  const [loaded, setLoaded] = useState(false)
+  const [kicked, setKicked] = useState(false)
+
+  // A finished rename run refreshes the grid — also re-arm the button so
+  // clips that arrive later can be named too.
+  useEffect(() => {
+    setKicked(false)
+  }, [namedCount])
+
+  // Refresh when opened and after every completed rename, so the grid always
+  // mirrors the folder as it is on disk.
+  useEffect(() => {
+    let gone = false
+    window.api
+      .watchListMedia(folder)
+      .then((f) => {
+        if (!gone) {
+          setFiles(f)
+          setLoaded(true)
+        }
+      })
+      .catch(() => setLoaded(true))
+    return () => {
+      gone = true
+    }
+  }, [folder, namedCount])
+
+  return (
+    <div className="mb-2">
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-[10px] uppercase tracking-wide text-faint">
+          In this folder now {loaded ? `(${files.length})` : ''}
+        </span>
+        {files.length > 0 && (
+          <button
+            onClick={() => {
+              setKicked(true)
+              void window.api.watchProcessExisting(ruleId)
+            }}
+            disabled={busy || kicked}
+            className="text-[11px] text-mint hover:underline disabled:cursor-default disabled:text-faint disabled:no-underline"
+            title={`Runs every clip below through AI naming — uses ${files.length} credit${files.length === 1 ? '' : 's'}`}
+          >
+            {busy || kicked
+              ? 'Naming clips… watch the activity feed below'
+              : `Name all ${files.length} now (${files.length} credit${files.length === 1 ? '' : 's'})`}
+          </button>
+        )}
+      </div>
+      {!loaded ? (
+        <div className="pb-1 text-[11px] text-faint">Looking in the folder…</div>
+      ) : files.length === 0 ? (
+        <div className="pb-1 text-[11px] text-faint">
+          No clips at the top level of this folder. Clips inside subfolders aren’t watched — move
+          them to the top level to rename them.
+        </div>
+      ) : (
+        <div className="flex gap-2 overflow-x-auto pb-1.5">
+          {files.map((f) => (
+            <div key={f.path} className="w-24 shrink-0">
+              <MediaThumb path={f.path} className="h-16 w-24 rounded-lg" />
+              <div className="mt-0.5 truncate text-[9px] text-faint" title={f.name}>
+                {f.name}
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>

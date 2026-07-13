@@ -32,7 +32,7 @@ import {
   removeFromLibrary,
   searchLibrary
 } from './library'
-import { countExistingMedia, processExisting, syncWatchers } from './automation'
+import { countExistingMedia, listFolderMedia, processExisting, syncWatchers } from './automation'
 import {
   applyPlan,
   buildPlan,
@@ -413,6 +413,7 @@ export function registerIpc(): void {
   // rule is saved), then process those files on explicit request. Fire-and-
   // forget: progress streams over the normal automation events.
   ipcMain.handle('watch:existingCount', (_e, folder: string) => countExistingMedia(folder))
+  ipcMain.handle('watch:listMedia', (_e, folder: string) => listFolderMedia(folder))
   ipcMain.handle('watch:processExisting', (_e, ruleId: string) => {
     void processExisting(ruleId)
   })

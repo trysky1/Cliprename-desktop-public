@@ -3,7 +3,7 @@ import chokidar, { FSWatcher } from 'chokidar'
 import { promises as fs } from 'fs'
 import path from 'path'
 import { Category, MediaItem, WatchEvent, WatchRule, kindForExt, NamingStyle } from '../shared/types'
-import { addWatchHistory, getWatchRules } from './store'
+import { addWatchHistory, getWatchHistory, getWatchRules } from './store'
 import { applyStyle, isGenericFilename, suggestNameCloud } from './ai'
 import { extractAudioClip, extractFrames, prepImage, readEmbeddedTitle } from './media'
 import { isSignedIn } from './cloud'
@@ -229,6 +229,15 @@ export async function countExistingMedia(folder: string): Promise<number> {
   return (await listMedia(folder)).length
 }
 
+// The folder's current top-level media, for the panel's preview grid — so the
+// user can SEE what a watch rule would rename before spending credits.
+export async function listFolderMedia(
+  folder: string
+): Promise<{ path: string; name: string }[]> {
+  const files = await listMedia(folder)
+  return files.map((p) => ({ path: p, name: path.basename(p) }))
+}
+
 // One-time pass over the files that were ALREADY in the folder when the rule
 // was created. Watchers deliberately skip pre-existing files; this runs them
 // through the exact same pipeline (same naming, same 1-credit-per-file cost)
@@ -237,8 +246,26 @@ export async function countExistingMedia(folder: string): Promise<number> {
 export async function processExisting(ruleId: string): Promise<void> {
   const rule = getWatchRules().find((r) => r.id === ruleId)
   if (!rule) return
-  const files = await listMedia(rule.folder)
-  if (files.length === 0) return
+  // Skip clips this rule already renamed once (their old name is in the
+  // history) — clicking "Name all" twice must not copy/rename them again.
+  const alreadyDone = new Set(getWatchHistory(rule.id).map((h) => h.oldName))
+  const files = (await listMedia(rule.folder)).filter(
+    (p) => !alreadyDone.has(path.basename(p))
+  )
+  if (files.length === 0) {
+    // Say so — a silent no-op here looks like "renaming is broken".
+    emit({
+      ruleId: rule.id,
+      folder: rule.folder,
+      file: rule.folder,
+      newName: '',
+      at: Date.now(),
+      status: 'found',
+      message:
+        'No clips to rename at the top level of this folder (clips inside subfolders aren’t watched, and already-renamed clips are skipped).'
+    })
+    return
+  }
   emit({
     ruleId: rule.id,
     folder: rule.folder,

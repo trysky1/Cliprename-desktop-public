@@ -190,6 +190,8 @@ const api = {
   watchDelete: (id: string): Promise<WatchRule[]> => ipcRenderer.invoke('watch:delete', id),
   watchHistory: (ruleId?: string): Promise<WatchHistoryEntry[]> =>
     ipcRenderer.invoke('watch:history', ruleId),
+  watchListMedia: (folder: string): Promise<{ path: string; name: string }[]> =>
+    ipcRenderer.invoke('watch:listMedia', folder),
   watchExistingCount: (folder: string): Promise<number> =>
     ipcRenderer.invoke('watch:existingCount', folder),
   watchProcessExisting: (ruleId: string): Promise<void> =>
