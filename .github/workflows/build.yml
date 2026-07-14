@@ -1,0 +1,173 @@
+name: Build installers
+
+# Builds ClipRename Desktop from the PRIVATE source repo and publishes the
+# installers as a Release here. The source never lands in this repository —
+# it is checked out only on the ephemeral build runner, using a fine-grained
+# PAT (secret PRIVATE_CLONE_TOKEN: Contents read-only on
+# trysky1/cliprename-desktop). Running the builds HERE keeps them on public-repo
+# runners, which are free and unmetered.
+#
+# Trigger from the Actions tab (Run workflow) with a release_tag like v0.1.13.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Publish a release under this tag (e.g. v0.1.13). Leave empty to just build.'
+        required: false
+        default: ''
+
+# Needed to create releases and upload assets to them.
+permissions:
+  contents: write
+
+jobs:
+  # Publishing: create the (empty) release page first; each build job then
+  # attaches its installers DIRECTLY to it. The tag is created on this repo's
+  # default branch (the source-less landing page), so the release's automatic
+  # "Source code" archives contain no application source.
+  prepare-release:
+    name: Create release page
+    if: inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.release_tag }}
+    steps:
+      - name: Create the release (installers attach as each build finishes)
+        run: |
+          cat > notes.md <<'MD'
+          AI file sorting and renaming for video editors — the desktop companion to [cliprename.com](https://cliprename.com).
+
+          ## Install
+
+          | Your machine | Download |
+          |---|---|
+          | Windows PC | `ClipRename-<version>-setup.exe` |
+          | Mac with Apple Silicon (M1/M2/M3/M4) | `ClipRename-<version>-arm64.dmg` |
+          | Mac with Intel | `ClipRename-<version>-x64.dmg` |
+
+          ## First-launch warnings (unsigned build)
+
+          **Windows** — download the `.exe`, run it. If SmartScreen says
+          "Windows protected your PC": click **More info → Run anyway**
+          (the app isn't code-signed yet, so Windows can't verify the publisher).
+
+          **macOS** — pick your chip: `arm64` for M1/M2/M3/M4 Macs,
+          `x64` for older Intel Macs. Easiest install (no warnings at all):
+          BEFORE opening the download, run in Terminal
+          `xattr -d com.apple.quarantine ~/Downloads/ClipRename-*.dmg`,
+          then open the `.dmg` and drag ClipRename to Applications — done.
+
+          If you already installed and macOS claims the app *"is damaged"*
+          (it isn't — it just isn't Apple-notarized yet): right-click
+          **`Fix ClipRename.command`** in the `.dmg` → Open → Open — it now
+          asks for your password if macOS blocks the first attempt. Manual
+          alternative: `sudo xattr -cr /Applications/ClipRename.app`; if that
+          says *"Operation not permitted"*, enable Terminal under System
+          Settings → Privacy & Security → App Management and rerun it.
+          MD
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "ClipRename $TAG" --notes-file notes.md \
+            || echo "Release $TAG already exists — builds will upload assets to it."
+
+  build:
+    name: ${{ matrix.label }}
+    needs: [prepare-release]
+    # Run even when prepare-release is skipped (plain builds, no release).
+    if: always() && needs.prepare-release.result != 'failure'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows (PC)
+            script: build:win
+          # macOS is built on its native runner so the bundled ffmpeg binary
+          # (ffmpeg-static installs ONE arch per machine) always matches.
+          - os: macos-14 # Apple Silicon (M1/M2/M3/M4)
+            label: macOS (Apple Silicon)
+            script: build:mac
+          - os: macos-15-intel # Intel Macs (pre-2021)
+            label: macOS (Intel)
+            script: build:mac
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check the private-source token exists
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.PRIVATE_CLONE_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Missing PRIVATE_CLONE_TOKEN secret — create a fine-grained PAT with Contents read-only on trysky1/cliprename-desktop and add it under this repo's Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
+      # The application source lives in the private repo; it exists only on
+      # this ephemeral runner and is destroyed when the job ends.
+      - uses: actions/checkout@v5
+        with:
+          repository: trysky1/cliprename-desktop
+          ref: main
+          token: ${{ secrets.PRIVATE_CLONE_TOKEN }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Type-check
+        run: npm run typecheck
+
+      # ---- Apple signing + notarization (removes the "damaged" warning) ----
+      # Inactive until the repo has the secrets. To turn on real signing (needs
+      # an Apple Developer account, $99/yr), add repo secrets:
+      # MAC_CERT_P12_BASE64 (Developer ID cert, base64), MAC_CERT_PASSWORD,
+      # APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID — then every build
+      # signs + notarizes automatically and macOS installs cleanly.
+      - name: Configure code signing
+        shell: bash
+        env:
+          MAC_CERT: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          MAC_CERT_PW: ${{ secrets.MAC_CERT_PASSWORD }}
+          AP_ID: ${{ secrets.APPLE_ID }}
+          AP_PW: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          AP_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ] && [ -n "$MAC_CERT" ]; then
+            {
+              echo "CSC_LINK=$MAC_CERT"
+              echo "CSC_KEY_PASSWORD=$MAC_CERT_PW"
+              echo "APPLE_ID=$AP_ID"
+              echo "APPLE_APP_SPECIFIC_PASSWORD=$AP_PW"
+              echo "APPLE_TEAM_ID=$AP_TEAM"
+              echo "CSC_IDENTITY_AUTO_DISCOVERY=true"
+            } >> "$GITHUB_ENV"
+            echo "Apple signing + notarization ENABLED."
+          else
+            # No cert: electron-builder ad-hoc signs the macOS app so it
+            # launches after Gatekeeper is cleared (see the bundled fixer).
+            echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
+            echo "No signing secrets — building unsigned."
+          fi
+
+      - name: Build app + installer
+        run: npm run ${{ matrix.script }}
+
+      # Publishing: attach the installers straight to the release. The .yml +
+      # .blockmap files are the in-app updater's feed — without them installed
+      # apps can't see or download new versions.
+      - name: Upload installers to the release
+        if: inputs.release_tag != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          shopt -s nullglob
+          # latest*.yml only — release/*.yml would also grab builder-debug.yml.
+          # .zip is the macOS in-app updater's payload (dmg is for manual installs).
+          files=(release/*.exe release/*.dmg release/*.zip release/latest*.yml release/*.blockmap)
+          echo "Uploading: ${files[*]}"
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "${files[@]}"
