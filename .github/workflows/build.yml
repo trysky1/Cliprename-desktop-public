@@ -21,19 +21,33 @@ permissions:
   contents: write
 
 jobs:
-  # Publishing: create the (empty) release page first; each build job then
-  # attaches its installers DIRECTLY to it. The tag is created on this repo's
-  # default branch (the source-less landing page), so the release's automatic
-  # "Source code" archives contain no application source.
+  # Publishing: create the release as a DRAFT first; each build job attaches
+  # its installers directly to it, and the final job flips it live only after
+  # EVERY build succeeded. Installed apps resolve "latest release" for their
+  # update feed, and drafts are invisible to them — so a failed build can
+  # never leave a published release without latest.yml + installers (which
+  # 404s the in-app updater on every machine). The tag is created on this
+  # repo's default branch (the source-less landing page) at publish time, so
+  # the release's automatic "Source code" archives contain no application
+  # source.
   prepare-release:
-    name: Create release page
+    name: Create draft release
     if: inputs.release_tag != ''
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ inputs.release_tag }}
+      CLONE_TOKEN: ${{ secrets.PRIVATE_CLONE_TOKEN }}
     steps:
-      - name: Create the release (installers attach as each build finishes)
+      # Fail HERE, before any release page exists — a missing token would kill
+      # every build job after the page was already published as "latest".
+      - name: Check the private-source token exists
+        run: |
+          if [ -z "$CLONE_TOKEN" ]; then
+            echo "::error::Missing PRIVATE_CLONE_TOKEN secret — create a fine-grained PAT with Contents read-only on trysky1/cliprename-desktop and add it under this repo's Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+      - name: Create the draft release (installers attach as each build finishes)
         run: |
           cat > notes.md <<'MD'
           AI file sorting and renaming for video editors — the desktop companion to [cliprename.com](https://cliprename.com).
@@ -66,7 +80,7 @@ jobs:
           says *"Operation not permitted"*, enable Terminal under System
           Settings → Privacy & Security → App Management and rerun it.
           MD
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft \
             --target "$GITHUB_SHA" --title "ClipRename $TAG" --notes-file notes.md \
             || echo "Release $TAG already exists — builds will upload assets to it."
 
@@ -171,3 +185,20 @@ jobs:
           files=(release/*.exe release/*.dmg release/*.zip release/latest*.yml release/*.blockmap)
           echo "Uploading: ${files[*]}"
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "${files[@]}"
+
+  # Only when all three platforms uploaded their installers does the draft go
+  # live (and its tag get created). If any build fails, the release stays a
+  # draft: invisible to installed apps, so their updaters keep working off the
+  # previous good release. Editing an already-published release (re-running a
+  # tag to repair it) is a harmless no-op.
+  publish-release:
+    name: Publish release
+    needs: [prepare-release, build]
+    if: inputs.release_tag != '' && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.release_tag }}
+    steps:
+      - name: Flip the draft live — every installer is attached
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
