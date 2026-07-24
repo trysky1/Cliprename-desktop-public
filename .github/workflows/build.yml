@@ -66,8 +66,13 @@ jobs:
           says *"Operation not permitted"*, enable Terminal under System
           Settings → Privacy & Security → App Management and rerun it.
           MD
+          # The heredoc above is quoted so the notes' backticks stay literal —
+          # which also leaves "<version>" as-is. Substitute the real version now,
+          # otherwise the download table names files that don't exist.
+          sed -i "s/<version>/${TAG#v}/g" notes.md
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" --title "ClipRename $TAG" --notes-file notes.md \
+            || gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md \
             || echo "Release $TAG already exists — builds will upload assets to it."
 
   build:
