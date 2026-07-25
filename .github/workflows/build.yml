@@ -15,6 +15,11 @@ on:
         description: 'Publish a release under this tag (e.g. v0.1.13). Leave empty to just build.'
         required: false
         default: ''
+      prerelease:
+        description: 'Publish as a TEST build. GitHub hides prereleases from /releases/latest, so users on the stable channel never see it. Flip it to a real release later with: gh release edit <tag> --prerelease=false'
+        required: false
+        type: boolean
+        default: false
 
 # Needed to create releases and upload assets to them.
 permissions:
@@ -70,9 +75,15 @@ jobs:
           # which also leaves "<version>" as-is. Substitute the real version now,
           # otherwise the download table names files that don't exist.
           sed -i "s/<version>/${TAG#v}/g" notes.md
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+          # A prerelease is invisible to the app's stable update check, which is
+          # what makes it safe to test on real machines before anyone else gets
+          # it. Passed on BOTH paths so re-running an existing tag as a test
+          # build actually marks it as one.
+          PRE=""
+          if [ "${{ inputs.prerelease }}" = "true" ]; then PRE="--prerelease"; fi
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" $PRE \
             --target "$GITHUB_SHA" --title "ClipRename $TAG" --notes-file notes.md \
-            || gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md \
+            || gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" $PRE --notes-file notes.md \
             || echo "Release $TAG already exists — builds will upload assets to it."
 
   build:
