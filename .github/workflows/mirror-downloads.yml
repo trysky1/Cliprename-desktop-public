@@ -1,0 +1,158 @@
+name: Mirror downloads to R2
+
+# Copies the CURRENT stable release's files to the download host, so people
+# download from cliprename.com instead of from a github.com URL.
+#
+# R2 rather than Supabase Storage for one reason: egress. These are ~120 MB
+# installers, and R2 charges nothing to serve them, where object stores that
+# bill bandwidth turn every download into a line item. Storage here is one
+# release, about 630 MB, which costs roughly a cent a month.
+#
+# SAFE TO MERGE BEFORE THE BUCKET EXISTS. With the secrets unset it prints the
+# setup steps and exits 0 — it never fails a release for infrastructure that
+# has not been created yet.
+#
+# ── One-time setup ────────────────────────────────────────────────────────
+#  1. Cloudflare → R2 → create a bucket, e.g. `cliprename-downloads`.
+#  2. That bucket → Settings → Public access → connect a custom domain,
+#     `dl.cliprename.com`. (Use the custom domain, NOT the r2.dev URL: r2.dev
+#     is rate-limited and meant for development.)
+#  3. R2 → Manage API tokens → create a token with Object Read & Write scoped
+#     to that bucket.
+#  4. Add four repository secrets here (Settings → Secrets → Actions):
+#       R2_ACCOUNT_ID          Cloudflare account id
+#       R2_ACCESS_KEY_ID       from the API token
+#       R2_SECRET_ACCESS_KEY   from the API token
+#       R2_BUCKET              the bucket name
+#
+# Nothing about the app changes when this starts working: the website reads
+# whichever host is live, and the in-app updater keeps using GitHub Releases
+# until a later version moves it. Existing installs must keep finding updates
+# where they were built to look, so the two hosts run side by side through the
+# transition rather than switching over in one step.
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-downloads
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    name: Publish the current release to the download host
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      # R2 always answers with the checksum trailer the newer AWS CLI default
+      # rejects. Without these two the upload fails on a header, which reads as
+      # a credentials problem and is not one.
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+    steps:
+      - name: Check whether the download host is configured
+        id: cfg
+        run: |
+          set -euo pipefail
+          if [ -z "$R2_ACCOUNT_ID" ] || [ -z "$R2_BUCKET" ] || [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Download host not configured yet"
+              echo ""
+              echo "Skipped, and this run is still a success — a missing bucket must never"
+              echo "fail a release. Downloads continue to be served from GitHub until the"
+              echo "four \`R2_*\` secrets exist. The header comment in this workflow file"
+              echo "lists the four setup steps."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
+      - name: Work out which release is the current one
+        if: steps.cfg.outputs.configured == 'true'
+        id: rel
+        run: |
+          set -euo pipefail
+          # /releases/latest, deliberately: it excludes prereleases, so a test
+          # build is never mirrored to the public download host.
+          TAG=$(gh api "repos/$REPO/releases/latest" --jq '.tag_name')
+          if [ -z "$TAG" ]; then
+            echo "::error::No stable release to mirror."
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Mirroring $TAG"
+
+      - name: Download the release files
+        if: steps.cfg.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # Installers, the updater feed, and the blockmaps the updater uses for
+          # differential downloads. Source archives are excluded — they are the
+          # storefront repo's own contents, not part of the app.
+          gh release download "${{ steps.rel.outputs.tag }}" --repo "$REPO" --dir dist \
+            --pattern '*.exe' --pattern '*.dmg' --pattern '*.zip' \
+            --pattern '*.yml' --pattern '*.blockmap'
+          ls -la dist
+
+      - name: Publish to the bucket
+        if: steps.cfg.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+
+          # --delete makes the bucket mirror the release exactly, which is what
+          # removes the previous version's installers. That is the same rule the
+          # releases page follows: one downloadable version, so nobody can reach
+          # an older build that predates the current one's fixes.
+          #
+          # Sync uploads the new files BEFORE deleting the old ones, so there is
+          # no window where the download page resolves a version that is not
+          # there yet.
+          aws s3 sync dist "s3://${R2_BUCKET}/" \
+            --endpoint-url "$ENDPOINT" \
+            --delete \
+            --no-progress \
+            --cache-control 'public, max-age=300'
+
+          echo "--- bucket now contains ---"
+          aws s3 ls "s3://${R2_BUCKET}/" --endpoint-url "$ENDPOINT"
+
+      - name: Confirm the files are actually reachable
+        if: steps.cfg.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.rel.outputs.tag }}"
+          VERSION="${VERSION#v}"
+          FAILED=0
+          # HEAD each installer over the PUBLIC domain, not the S3 endpoint: a
+          # successful upload proves nothing about whether the custom domain is
+          # connected, and that is the half users actually touch.
+          for FILE in "ClipRename-${VERSION}-setup.exe" "ClipRename-${VERSION}-arm64.dmg" "ClipRename-${VERSION}-x64.dmg"; do
+            URL="https://dl.cliprename.com/${FILE}"
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' -I --max-time 30 "$URL" || echo 000)
+            echo "$CODE  $URL"
+            if [ "$CODE" != "200" ]; then FAILED=1; fi
+          done
+          if [ "$FAILED" != "0" ]; then
+            echo "::error::One or more installers are not reachable on dl.cliprename.com. The upload succeeded, so the likely cause is the custom domain not being connected to the bucket (R2 → bucket → Settings → Public access)."
+            exit 1
+          fi
+          {
+            echo "### Downloads published"
+            echo ""
+            echo "\`${{ steps.rel.outputs.tag }}\` is live on \`dl.cliprename.com\`, and the"
+            echo "previous version's files have been removed from the bucket."
+          } >> "$GITHUB_STEP_SUMMARY"
