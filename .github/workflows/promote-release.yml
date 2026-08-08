@@ -1,0 +1,94 @@
+name: Promote a test build to stable
+
+# Ships an existing test build to everyone by clearing its prerelease flag.
+#
+# Deliberately does NOT rebuild. The whole point of testing a prerelease is
+# that the bytes users receive are the ones that passed the smoke test; a
+# rebuild would produce different bytes and quietly discard that guarantee.
+#
+# This exists because there was no way to do it from the Actions tab. The build
+# workflow only ever ADDS --prerelease (when publishing a test build), so
+# re-running it with prerelease=false leaves an already-flagged release flagged:
+# clearing the flag needs an explicit --prerelease=false, which is what this does.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to promote to stable (e.g. v0.1.29)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: promote-release
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Promote ${{ inputs.tag }} to stable
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Check the release is fit to promote
+        run: |
+          set -euo pipefail
+
+          if ! gh release view "$TAG" --repo "$REPO" --json tagName >/dev/null 2>&1; then
+            echo "::error::No release tagged $TAG in $REPO."
+            exit 1
+          fi
+
+          # A release with no installers attached would leave every visitor a
+          # download button pointing at nothing. Require the three a user can
+          # actually install before this becomes the version everyone gets.
+          ASSETS=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name')
+          MISSING=""
+          for PATTERN in -setup.exe -arm64.dmg -x64.dmg latest.yml latest-mac.yml; do
+            if ! printf '%s\n' "$ASSETS" | grep -q -- "$PATTERN"; then
+              MISSING="$MISSING $PATTERN"
+            fi
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::$TAG is missing:$MISSING — promoting it would advertise a version people cannot install. (latest*.yml are the updater's feed; without them installed apps see the release but cannot download it.)"
+            exit 1
+          fi
+
+          # A dev-versioned tag is a build that was never meant for anyone. In
+          # semver it also sorts BELOW the release it leads up to, so promoting
+          # one would publish a "latest" that installed copies rank as older.
+          case "${TAG#v}" in
+            *-*) echo "::error::$TAG carries a prerelease suffix. Those are dev builds and can never be stable — cut a real patch version instead."; exit 1 ;;
+          esac
+
+      - name: Clear the prerelease flag
+        run: |
+          set -euo pipefail
+          # --latest is not redundant: it pins which release /releases/latest
+          # returns, and that endpoint is what BOTH the app's stable update
+          # check and the website's download page read.
+          gh release edit "$TAG" --repo "$REPO" --prerelease=false --latest
+
+      - name: Confirm it is now the release users get
+        run: |
+          set -euo pipefail
+          PRE=$(gh release view "$TAG" --repo "$REPO" --json isPrerelease --jq '.isPrerelease')
+          LATEST=$(gh api "repos/$REPO/releases/latest" --jq '.tag_name')
+          echo "prerelease flag: $PRE"
+          echo "/releases/latest now returns: $LATEST"
+          if [ "$PRE" != "false" ] || [ "$LATEST" != "$TAG" ]; then
+            echo "::error::Promotion did not take effect (prerelease=$PRE, latest=$LATEST)."
+            exit 1
+          fi
+          {
+            echo "### Promoted \`$TAG\` to stable"
+            echo ""
+            echo "\`/releases/latest\` now returns \`$LATEST\`, so this is what the"
+            echo "website download page offers and what every app on the stable"
+            echo "channel will be offered on its next update check."
+          } >> "$GITHUB_STEP_SUMMARY"
