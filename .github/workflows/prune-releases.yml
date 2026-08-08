@@ -1,0 +1,149 @@
+name: Prune old releases
+
+# Keeps this repo showing exactly two things: the current stable release, and
+# the current test build if there is one newer than it. Everything else is
+# deleted, tag and installers together.
+#
+# Why this is a security control and not housekeeping: every old release here
+# is a downloadable, permanently-linkable copy of the app that predates the
+# fixes in the current one. Anyone who finds a v0.1.14 link installs a build
+# with known holes and never learns it. Deleting the release deletes the
+# installers with it, so the only version anybody can obtain is the newest.
+#
+# Deleting a release does NOT strand anyone already running an old build. The
+# updater asks for /releases/latest and is told the newest version, whatever
+# the installed one is; nothing consults the release it came from. The one real
+# cost is that electron-updater can no longer do a differential download
+# against the previous version's blockmap, so an update fetches the whole
+# installer instead of a delta.
+#
+# Runs automatically after the build workflow finishes, and on demand.
+# dry_run defaults to TRUE — this deletes things, so seeing the list first is
+# the default and destroying them is the deliberate act.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'List what would be deleted without deleting it'
+        type: boolean
+        required: false
+        default: true
+  workflow_run:
+    workflows: ['Build installers']
+    types: [completed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prune-releases
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    name: Keep only the newest stable and the newest test build
+    # After an automatic run, only prune if the build actually succeeded:
+    # pruning after a failed build could delete the last good release while the
+    # new one has no installers attached.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      # workflow_run carries no inputs, so an automatic run is always a real
+      # prune; only a manual run can ask for a dry run.
+      DRY: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+    steps:
+      - name: Work out what to keep
+        id: plan
+        run: |
+          set -euo pipefail
+
+          # Drafts are unpublished and invisible; leave them alone entirely.
+          gh api "repos/$REPO/releases" --paginate \
+            | jq -s 'add | map(select(.draft | not))' > releases.json
+
+          COUNT=$(jq 'length' releases.json)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "No published releases — nothing to do."
+            echo "delete_count=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Sort by the NUMERIC version, never by date or by string. A string
+          # sort puts v0.1.9 above v0.1.10, and publish date is wrong whenever
+          # an older tag is rebuilt in place — which is the documented way of
+          # iterating on a release here, so it happens routinely.
+          SORT='sort_by(.tag_name | ltrimstr("v") | split("-")[0] | split(".") | map(tonumber? // 0))'
+
+          KEEP_STABLE=$(jq -r "[.[] | select(.prerelease | not)] | $SORT | last | .tag_name // empty" releases.json)
+          NEWEST_TEST=$(jq -r "[.[] | select(.prerelease)]     | $SORT | last | .tag_name // empty" releases.json)
+
+          # A test build is only worth keeping while it leads somewhere: once a
+          # stable release catches up with it, it is a strictly worse copy of
+          # shipped code and goes the way of the rest.
+          KEEP_TEST=""
+          if [ -n "$NEWEST_TEST" ]; then
+            if [ -z "$KEEP_STABLE" ]; then
+              KEEP_TEST="$NEWEST_TEST"
+            else
+              HIGHER=$(printf '%s\n%s\n' "${KEEP_STABLE#v}" "${NEWEST_TEST#v}" | sort -V | tail -n1)
+              if [ "$HIGHER" = "${NEWEST_TEST#v}" ] && [ "${KEEP_STABLE#v}" != "${NEWEST_TEST#v}" ]; then
+                KEEP_TEST="$NEWEST_TEST"
+              fi
+            fi
+          fi
+
+          # Refuse to run if there is no stable release to keep. Without this a
+          # repo that only ever held test builds would have every one of them
+          # deleted, leaving nothing to download at all.
+          if [ -z "$KEEP_STABLE" ]; then
+            echo "::error::No stable (non-prerelease) release found. Refusing to prune — that would leave nothing installable."
+            exit 1
+          fi
+
+          jq -r '.[].tag_name' releases.json | sort -u > all.txt
+          : > keep.txt
+          echo "$KEEP_STABLE" >> keep.txt
+          # Written as an if rather than `[ -n "$X" ] && echo`: under `set -e`
+          # that idiom exits the script when the test is false, which here is
+          # the ordinary case of having no test build to keep.
+          if [ -n "$KEEP_TEST" ]; then
+            echo "$KEEP_TEST" >> keep.txt
+          fi
+          sort -u -o keep.txt keep.txt
+          comm -23 all.txt keep.txt > delete.txt
+
+          {
+            echo "### Prune plan"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Keep (stable) | \`$KEEP_STABLE\` |"
+            echo "| Keep (test build) | \`${KEEP_TEST:-— none newer than stable}\` |"
+            echo "| Delete | $(wc -l < delete.txt) release(s) |"
+            echo "| Mode | $([ "$DRY" = "true" ] && echo 'DRY RUN — nothing deleted' || echo 'deleting for real') |"
+            echo ""
+            if [ -s delete.txt ]; then sed 's/^/- `/; s/$/`/' delete.txt; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "delete_count=$(wc -l < delete.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Delete the rest
+        if: steps.plan.outputs.delete_count != '0'
+        run: |
+          set -euo pipefail
+          while read -r TAG; do
+            [ -n "$TAG" ] || continue
+            if [ "$DRY" = "true" ]; then
+              echo "DRY RUN — would delete $TAG"
+            else
+              echo "Deleting $TAG"
+              # --cleanup-tag takes the git tag too: a tag left behind still
+              # offers auto-generated "Source code" archives of that commit.
+              gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes
+            fi
+          done < delete.txt
