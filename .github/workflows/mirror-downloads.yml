@@ -5,8 +5,8 @@ name: Mirror downloads to R2
 #
 # R2 rather than Supabase Storage for one reason: egress. These are ~120 MB
 # installers, and R2 charges nothing to serve them, where object stores that
-# bill bandwidth turn every download into a line item. Storage here is one
-# release, about 630 MB, which costs roughly a cent a month.
+# bill bandwidth turn every download into a line item. Storage is one release
+# plus its aliases, about 1.2 GB, which costs roughly two cents a month.
 #
 # SAFE TO MERGE BEFORE THE BUCKET EXISTS. With the secrets unset it prints the
 # setup steps and exits 0 — it never fails a release for infrastructure that
@@ -25,11 +25,14 @@ name: Mirror downloads to R2
 #       R2_SECRET_ACCESS_KEY   from the API token
 #       R2_BUCKET              the bucket name
 #
-# Nothing about the app changes when this starts working: the website reads
-# whichever host is live, and the in-app updater keeps using GitHub Releases
-# until a later version moves it. Existing installs must keep finding updates
-# where they were built to look, so the two hosts run side by side through the
-# transition rather than switching over in one step.
+# No CORS configuration is needed. The download buttons are ordinary links to
+# the `-latest-` aliases below, and a link is navigation, not a cross-origin
+# fetch — so the browser never asks the bucket for permission.
+#
+# Nothing about the app changes when this starts working: the in-app updater
+# keeps using GitHub Releases until a later version moves it. Existing installs
+# must keep finding updates where they were built to look, so the two hosts run
+# side by side through the transition rather than switching over in one step.
 
 on:
   workflow_dispatch:
@@ -92,6 +95,7 @@ jobs:
             exit 1
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
           echo "Mirroring $TAG"
 
       - name: Download the release files
@@ -107,20 +111,37 @@ jobs:
             --pattern '*.yml' --pattern '*.blockmap'
           ls -la dist
 
+      - name: Add version-less aliases
+        if: steps.cfg.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          V="${{ steps.rel.outputs.version }}"
+          # Stable names the website can link to directly. Without these the
+          # download page would have to ask the GitHub API what the current
+          # version is just to build a URL — which keeps a GitHub dependency on
+          # the page and breaks the moment the repo goes private.
+          cp "dist/ClipRename-${V}-setup.exe"  "dist/ClipRename-latest-setup.exe"
+          cp "dist/ClipRename-${V}-arm64.dmg"  "dist/ClipRename-latest-arm64.dmg"
+          cp "dist/ClipRename-${V}-x64.dmg"    "dist/ClipRename-latest-x64.dmg"
+          # A tiny file the page can read to show "Latest version: v0.1.29"
+          # without calling GitHub. Same-origin rules do not apply to it either,
+          # so keep it small and cacheable.
+          printf '{"version":"%s"}\n' "$V" > dist/latest-version.json
+          ls -la dist
+
       - name: Publish to the bucket
         if: steps.cfg.outputs.configured == 'true'
         run: |
           set -euo pipefail
           ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
 
-          # --delete makes the bucket mirror the release exactly, which is what
-          # removes the previous version's installers. That is the same rule the
-          # releases page follows: one downloadable version, so nobody can reach
-          # an older build that predates the current one's fixes.
+          # --delete makes the bucket mirror this release exactly, which is what
+          # removes the previous version's installers. Same rule the releases
+          # page follows: one downloadable version, so nobody can reach an older
+          # build that predates the current one's fixes.
           #
-          # Sync uploads the new files BEFORE deleting the old ones, so there is
-          # no window where the download page resolves a version that is not
-          # there yet.
+          # Sync uploads before it deletes, so there is no window in which the
+          # download page resolves a file that is not there yet.
           aws s3 sync dist "s3://${R2_BUCKET}/" \
             --endpoint-url "$ENDPOINT" \
             --delete \
@@ -134,20 +155,19 @@ jobs:
         if: steps.cfg.outputs.configured == 'true'
         run: |
           set -euo pipefail
-          VERSION="${{ steps.rel.outputs.tag }}"
-          VERSION="${VERSION#v}"
           FAILED=0
-          # HEAD each installer over the PUBLIC domain, not the S3 endpoint: a
-          # successful upload proves nothing about whether the custom domain is
-          # connected, and that is the half users actually touch.
-          for FILE in "ClipRename-${VERSION}-setup.exe" "ClipRename-${VERSION}-arm64.dmg" "ClipRename-${VERSION}-x64.dmg"; do
+          # HEAD over the PUBLIC domain, not the S3 endpoint: a successful
+          # upload proves nothing about whether the custom domain is connected,
+          # and that is the half users actually touch. The aliases are checked
+          # because they are what the website links to.
+          for FILE in ClipRename-latest-setup.exe ClipRename-latest-arm64.dmg ClipRename-latest-x64.dmg latest-version.json; do
             URL="https://dl.cliprename.com/${FILE}"
             CODE=$(curl -s -o /dev/null -w '%{http_code}' -I --max-time 30 "$URL" || echo 000)
             echo "$CODE  $URL"
             if [ "$CODE" != "200" ]; then FAILED=1; fi
           done
           if [ "$FAILED" != "0" ]; then
-            echo "::error::One or more installers are not reachable on dl.cliprename.com. The upload succeeded, so the likely cause is the custom domain not being connected to the bucket (R2 → bucket → Settings → Public access)."
+            echo "::error::Files uploaded but are not reachable on dl.cliprename.com — the likely cause is the custom domain not being connected to the bucket (R2 → bucket → Settings → Public access)."
             exit 1
           fi
           {
