@@ -1,0 +1,195 @@
+name: Dev build (beta channel)
+
+# Builds ClipRename Desktop from ANY branch of the private source repo and
+# publishes it HERE as a PRERELEASE. GitHub hides prereleases from
+# /releases/latest, so users on the stable channel never see it — but installed
+# dev/beta builds read this repo's full release list (the app's Beta update
+# channel) and offer it as a one-click in-app update: Settings → Check for
+# updates → Update.
+#
+# Trigger from the Actions tab (Run workflow): pick which private-repo branch
+# to build. Reuses the same PRIVATE_CLONE_TOKEN secret as build.yml; no other
+# setup needed. Old test builds are cleaned up by prune-releases.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch (or tag/commit) of trysky1/cliprename-desktop to build'
+        required: false
+        default: 'main'
+      platforms:
+        description: 'Which installers to build (fewer = faster and cheaper)'
+        type: choice
+        options: [windows, macos, all]
+        default: windows
+
+permissions:
+  contents: write
+
+# Not cancel-in-progress: a cancelled run leaves a release with only some of
+# its installers attached.
+concurrency:
+  group: dev-build
+  cancel-in-progress: false
+
+jobs:
+  setup:
+    name: Version + release page
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      matrix: ${{ steps.m.outputs.matrix }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check the private-source token exists
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.PRIVATE_CLONE_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Missing PRIVATE_CLONE_TOKEN secret — create a fine-grained PAT with Contents read-only on trysky1/cliprename-desktop and add it under this repo's Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
+      # Only to read package.json and resolve the commit — the source exists
+      # solely on this ephemeral runner.
+      - uses: actions/checkout@v5
+        with:
+          repository: trysky1/cliprename-desktop
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.PRIVATE_CLONE_TOKEN }}
+
+      - name: Version this dev build
+        id: v
+        shell: bash
+        run: |
+          BASE=$(node -p "require('./package.json').version")
+          # package.json holds the last SHIPPED version, so a dev build belongs
+          # to the NEXT patch: 0.1.30 → 0.1.31-beta.N. In semver that ranks
+          # above the installed release and below the next stable, so installed
+          # dev builds update forward and then cleanly update away.
+          #
+          # N is a UTC minute-stamp, not run_number, so ordering stays
+          # monotonic across every pipeline that publishes beta builds — the
+          # private repo's test-build artifacts use the same scheme.
+          CORE=${BASE%%-*}
+          IFS=. read -r MA MI PA <<< "$CORE"
+          VERSION="$MA.$MI.$((PA + 1))-beta.$(date -u +%Y%m%d%H%M)"
+          {
+            echo "version=$VERSION"
+            echo "tag=v$VERSION"
+            echo "srcsha=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### Dev build \`$VERSION\`"
+            echo ""
+            echo "Source: \`${{ inputs.ref }}\` @ \`$(git rev-parse --short HEAD)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Decide which runners to use
+        id: m
+        shell: bash
+        env:
+          PLATFORMS: ${{ inputs.platforms || 'windows' }}
+        run: |
+          WIN='{"os":"windows-latest","label":"Windows (PC)","script":"build:win"}'
+          ARM='{"os":"macos-14","label":"macOS (Apple Silicon)","script":"build:mac"}'
+          INT='{"os":"macos-15-intel","label":"macOS (Intel)","script":"build:mac"}'
+          case "$PLATFORMS" in
+            macos) INC="[$ARM,$INT]" ;;
+            all)   INC="[$WIN,$ARM,$INT]" ;;
+            *)     INC="[$WIN]" ;;
+          esac
+          echo "matrix={\"include\":$INC}" >> "$GITHUB_OUTPUT"
+
+      - name: Create the prerelease (installers attach as each build finishes)
+        env:
+          TAG: ${{ steps.v.outputs.tag }}
+          VERSION: ${{ steps.v.outputs.version }}
+          SRC_REF: ${{ inputs.ref }}
+          SRC_SHA: ${{ steps.v.outputs.srcsha }}
+        run: |
+          {
+            printf '**Developer test build — not for users.** Hidden from the stable update channel.\n\n'
+            printf 'Installed dev builds pick this up automatically: Settings → Check for updates.\n\n'
+            printf '| | |\n|---|---|\n'
+            printf '| Version | `%s` |\n' "$VERSION"
+            printf '| Source branch | `%s` |\n' "$SRC_REF"
+            printf '| Source commit | `%s` |\n' "$SRC_SHA"
+          } > notes.md
+          # The tag targets this repo's default branch (a source-less landing
+          # page), so the release's automatic "Source code" archives contain no
+          # application source. --prerelease on both paths so re-running an
+          # existing tag keeps it hidden from stable.
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease \
+            --target "$GITHUB_SHA" --title "Dev $VERSION" --notes-file notes.md \
+            || gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease --notes-file notes.md
+
+  build:
+    name: ${{ matrix.label }}
+    needs: setup
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: trysky1/cliprename-desktop
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.PRIVATE_CLONE_TOKEN }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Stamp the version and the commit into the build
+        shell: bash
+        run: |
+          npm version "${{ needs.setup.outputs.version }}" --no-git-tag-version --allow-same-version
+          echo "CR_BUILD_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Type-check
+        run: npm run typecheck
+
+      # Sign when a certificate is available but never notarize — dev builds
+      # optimize for a short loop, and unsigned installs on your own machine
+      # are fine (More info → Run anyway / right-click → Open).
+      - name: Configure code signing
+        shell: bash
+        env:
+          MAC_CERT: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          MAC_CERT_PW: ${{ secrets.MAC_CERT_PASSWORD }}
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ] && [ -n "$MAC_CERT" ]; then
+            {
+              echo "CSC_LINK=$MAC_CERT"
+              echo "CSC_KEY_PASSWORD=$MAC_CERT_PW"
+              echo "CSC_IDENTITY_AUTO_DISCOVERY=true"
+            } >> "$GITHUB_ENV"
+          else
+            echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build app + installer
+        run: npm run ${{ matrix.script }}
+
+      # latest*.yml and the .blockmaps are the in-app updater's feed — without
+      # them an installed dev build can see the release but not download it.
+      # .zip is the macOS updater's payload (dmg is for manual installs).
+      - name: Upload installers to the prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.setup.outputs.tag }}
+        run: |
+          shopt -s nullglob
+          files=(release/*.exe release/*.dmg release/*.zip release/latest*.yml release/*.blockmap)
+          echo "Uploading: ${files[*]}"
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "${files[@]}"
