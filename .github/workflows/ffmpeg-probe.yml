@@ -1,0 +1,50 @@
+name: Probe ffmpeg mpegts
+
+# One-shot diagnostic, manual trigger only. Answers a single question:
+# does the ffmpeg-static binary the app ships crash on mpegts files with
+# audio (AVCHD/.mts/.m2ts/.ts) on REAL user platforms? The development
+# container crashes on every such file, in two unrelated ffmpeg versions,
+# at the same bad address — which points at that container, not at ffmpeg.
+# This run settles it on the machines users actually have.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-14, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install the exact ffmpeg-static the app ships
+        shell: bash
+        run: |
+          npm init -y >/dev/null 2>&1
+          npm install ffmpeg-static@5.3.0 --no-audit --no-fund
+
+      - name: Battery
+        shell: bash
+        run: |
+          FF=$(node -p "require('ffmpeg-static')")
+          "$FF" -version | head -1
+          run(){ "$FF" -y -hide_banner -loglevel error "$@" >/dev/null 2>&1; echo "$?"; }
+          # write ts with aac audio, read it back, trim-encode it, stream-copy it
+          W=$(run -f lavfi -i "testsrc2=size=320x180:rate=30:duration=3" -f lavfi -i "sine=frequency=440:duration=3" -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac -shortest probe.ts)
+          R=$(run -i probe.ts -f null -)
+          T=$(run -ss 1 -i probe.ts -t 1 -c:v libx264 -preset veryfast -crf 20 -c:a aac out.mp4)
+          C=$(run -ss 1 -i probe.ts -t 1 -c copy out.ts)
+          echo "RESULT os=${{ matrix.os }} write=$W read=$R trim=$T copy=$C"
+          # The write is expected to succeed everywhere; the three reads are
+          # the question. Fail the job loudly if any of them dies so the
+          # conclusion is readable from the run status alone.
+          [ "$W" = "0" ] && [ "$R" = "0" ] && [ "$T" = "0" ] && [ "$C" = "0" ]
