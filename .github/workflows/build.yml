@@ -136,6 +136,46 @@ jobs:
       - name: Type-check
         run: npm run typecheck
 
+      # ---- Windows code signing (removes the SmartScreen warning) ----------
+      # Inactive until the repo has the secrets, exactly like the Apple block
+      # below — with none set this is a no-op and the build stays unsigned.
+      #
+      # This is almost certainly the largest single drop in the install funnel:
+      # an unsigned .exe makes SmartScreen tell people "Windows protected your
+      # PC", and the README currently has to teach them to click through it.
+      # The users most careful about what they run on a machine full of client
+      # footage are exactly the ones who stop there.
+      #
+      # Two ways to turn it on, both needing an identity check on the company:
+      #
+      #   A. Azure Trusted Signing (~$10/mo, no hardware token, reputation
+      #      accrues to Microsoft's CA immediately). Add AZURE_* secrets and
+      #      swap the electron-builder config to the azureSignOptions provider.
+      #
+      #   B. An OV/EV certificate from a CA (~$200-600/yr). Export the .pfx,
+      #      base64 it, and add:
+      #        WIN_CERT_PFX_BASE64  base64 of the .pfx
+      #        WIN_CERT_PASSWORD    its password
+      #      which is what the step below picks up. Note that a fresh OV cert
+      #      still starts with no SmartScreen reputation and takes some
+      #      downloads to warm up; EV is trusted immediately.
+      - name: Configure Windows code signing
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          WIN_CERT: ${{ secrets.WIN_CERT_PFX_BASE64 }}
+          WIN_CERT_PW: ${{ secrets.WIN_CERT_PASSWORD }}
+        run: |
+          if [ -n "$WIN_CERT" ]; then
+            {
+              echo "CSC_LINK=$WIN_CERT"
+              echo "CSC_KEY_PASSWORD=$WIN_CERT_PW"
+            } >> "$GITHUB_ENV"
+            echo "Windows code signing ENABLED."
+          else
+            echo "No WIN_CERT_PFX_BASE64 secret — building unsigned (SmartScreen will warn users)."
+          fi
+
       # ---- Apple signing + notarization (removes the "damaged" warning) ----
       # Inactive until the repo has the secrets. To turn on real signing (needs
       # an Apple Developer account, $99/yr), add repo secrets:
