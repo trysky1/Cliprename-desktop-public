@@ -182,8 +182,61 @@ jobs:
           TAG: ${{ inputs.release_tag }}
         run: |
           shopt -s nullglob
+          # Each macOS job also publishes its feed under an arch-specific name.
+          # Both jobs write a file CALLED latest-mac.yml that lists only their
+          # own architecture, and --clobber below means whichever job finishes
+          # last used to win — leaving one architecture's updater pointed at
+          # the other's build. The merge-mac-feed job combines the two arch
+          # files into the real latest-mac.yml after both builds are done.
+          if [ "$RUNNER_OS" = "macOS" ] && [ -f release/latest-mac.yml ]; then
+            arch=x64; [ "$(uname -m)" = "arm64" ] && arch=arm64
+            cp release/latest-mac.yml "release/latest-mac-$arch.yml"
+          fi
           # latest*.yml only — release/*.yml would also grab builder-debug.yml.
           # .zip is the macOS in-app updater's payload (dmg is for manual installs).
           files=(release/*.exe release/*.dmg release/*.zip release/latest*.yml release/*.blockmap)
           echo "Uploading: ${files[*]}"
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "${files[@]}"
+
+  # electron-builder on each macOS runner writes a latest-mac.yml that lists
+  # only the architecture it built, so after both uploads the release carries
+  # whichever one landed last — and the other architecture's in-app updater
+  # follows a feed pointing at the wrong build. This job waits for every
+  # build, then combines the two arch feeds into one latest-mac.yml whose
+  # files list carries both, which electron-updater filters by CPU at
+  # update time.
+  merge-mac-feed:
+    name: Merge the macOS update feeds
+    needs: [build]
+    if: inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.release_tag }}
+    steps:
+      - name: Combine arm64 + x64 into one latest-mac.yml
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'latest-mac-arm64.yml' --pattern 'latest-mac-x64.yml'
+          python3 -m pip install --quiet pyyaml 2>/dev/null || true
+          python3 - <<'PY'
+          import yaml
+          arm = yaml.safe_load(open('latest-mac-arm64.yml'))
+          x64 = yaml.safe_load(open('latest-mac-x64.yml'))
+          # x64 stays the base so the legacy top-level path/sha512 fallback
+          # (read by updaters too old to filter the files list by CPU) points
+          # at the one build every Mac can run, Rosetta included.
+          merged = dict(x64)
+          seen = set()
+          files = []
+          for f in (x64.get('files') or []) + (arm.get('files') or []):
+              if f['url'] in seen:
+                  continue
+              seen.add(f['url'])
+              files.append(f)
+          merged['files'] = files
+          yaml.safe_dump(merged, open('latest-mac.yml', 'w'), sort_keys=False)
+          PY
+          echo '--- merged feed:'
+          cat latest-mac.yml
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber latest-mac.yml
