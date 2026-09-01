@@ -36,8 +36,17 @@ name: Mirror downloads to R2
 
 on:
   workflow_dispatch:
+  # The release events are kept for edits made by hand in the GitHub UI, but
+  # they cannot be the main trigger: the publish/edit calls made during a
+  # build use that workflow's own GITHUB_TOKEN, and events a workflow raises
+  # with its own token never start other workflows. workflow_run is what
+  # actually fires after every release build and every promotion — the same
+  # pattern prune-releases.yml already relies on.
   release:
     types: [published, edited]
+  workflow_run:
+    workflows: ['Build installers', 'Promote a test build to stable']
+    types: [completed]
 
 permissions:
   contents: read
@@ -49,6 +58,11 @@ concurrency:
 jobs:
   mirror:
     name: Publish the current release to the download host
+    # After an automatic run, only mirror what a SUCCESSFUL workflow produced;
+    # manual and UI-edit triggers always run.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}

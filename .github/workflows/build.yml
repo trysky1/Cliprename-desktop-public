@@ -81,10 +81,24 @@ jobs:
           # build actually marks it as one.
           PRE=""
           if [ "${{ inputs.prerelease }}" = "true" ]; then PRE="--prerelease"; fi
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" $PRE \
-            --target "$GITHUB_SHA" --title "ClipRename $TAG" --notes-file notes.md \
-            || gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" $PRE --notes-file notes.md \
-            || echo "Release $TAG already exists — builds will upload assets to it."
+          # A NEW tag starts as a DRAFT: invisible to /releases/latest, the
+          # in-app updater, and the website's download redirector until the
+          # publish-release job at the end verifies every installer arrived
+          # and flips it live. Without this the release is public for the
+          # ~20 minutes the builds take, with zero-then-some assets — during
+          # the v0.1.36 build the website truthfully reported Windows and
+          # Intel downloads as unavailable, because at that moment they were.
+          # Re-runs of an existing tag take the edit path, which leaves its
+          # published state untouched: iterating on a live tag never hides
+          # it, and a leftover draft from a failed run is reused rather than
+          # duplicated (GitHub happily stores two drafts under one tag name,
+          # and every later by-tag lookup would then be ambiguous).
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" $PRE --notes-file notes.md
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft $PRE \
+              --target "$GITHUB_SHA" --title "ClipRename $TAG" --notes-file notes.md
+          fi
 
   build:
     name: ${{ matrix.label }}
@@ -135,6 +149,11 @@ jobs:
 
       - name: Type-check
         run: npm run typecheck
+
+      # The same suite that gates the source repo's CI; a release build is
+      # the last place a regression should be able to slip through.
+      - name: Unit tests
+        run: npm test
 
       # ---- Apple signing + notarization (removes the "damaged" warning) ----
       # Inactive until the repo has the secrets. To turn on real signing (needs
@@ -240,3 +259,46 @@ jobs:
           echo '--- merged feed:'
           cat latest-mac.yml
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber latest-mac.yml
+
+  # The other half of prepare-release's --draft. A release built for a new
+  # tag stays invisible until this job has checked that the complete asset
+  # set is present — three installers, the two macOS updater payloads, and
+  # all four update feeds. If anything is missing, the job fails and the
+  # draft stays hidden, so customers and the website keep resolving the
+  # previous complete release rather than a half-uploaded one. On an
+  # in-place rebuild of an already-published tag the flip is a no-op and
+  # this becomes a pure completeness check.
+  publish-release:
+    name: Publish once complete
+    needs: [build, merge-mac-feed]
+    if: inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.release_tag }}
+    steps:
+      - name: Verify every installer arrived, then go live
+        run: |
+          VER="${TAG#v}"
+          assets=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          echo "Assets on $TAG:"
+          echo "$assets"
+          missing=0
+          for want in \
+            "ClipRename-$VER-setup.exe" \
+            "ClipRename-$VER-arm64.dmg" \
+            "ClipRename-$VER-x64.dmg" \
+            "ClipRename-$VER-arm64.zip" \
+            "ClipRename-$VER-x64.zip" \
+            "latest.yml" \
+            "latest-mac.yml" \
+            "latest-mac-arm64.yml" \
+            "latest-mac-x64.yml"; do
+            if ! grep -qxF "$want" <<< "$assets"; then
+              echo "::error::Release asset missing: $want (the draft stays unpublished)"
+              missing=1
+            fi
+          done
+          [ "$missing" = 0 ] || exit 1
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          echo "Release $TAG is live with a complete asset set."
