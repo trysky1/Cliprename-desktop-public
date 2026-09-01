@@ -1,0 +1,33 @@
+name: Delete draft release
+
+# Housekeeping, dispatch-only: removes a DRAFT release and nothing else.
+# It refuses published releases and prereleases that have gone live, so it
+# can never take a download away from anyone. Drafts have no git tag yet,
+# so there is nothing else to clean up.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag of the DRAFT release to delete (e.g. v0.1.38)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  delete-draft:
+    name: Delete the draft
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Verify it is a draft, then delete it
+        run: |
+          isDraft=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
+          if [ "$isDraft" != "true" ]; then
+            echo "::error::Release $TAG is not a draft — refusing to delete a live release."
+            exit 1
+          fi
+          gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes
+          echo "Draft $TAG deleted."
