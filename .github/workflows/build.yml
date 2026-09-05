@@ -187,6 +187,15 @@ jobs:
             echo "No signing secrets — building unsigned."
           fi
 
+      # ClipRename's Blackmagic RAW reader (native/braw-helper in the source
+      # repo): a small C++ program that drives the decoder engine found on the
+      # user's machine. Needs nothing from Blackmagic to build (docs/BRAW.md).
+      # Never blocks the build: without it the app falls back to proxies and
+      # sound for BRAW clips. Same step as the private repo's dev.yml.
+      - name: Build the Blackmagic RAW reader
+        continue-on-error: true
+        run: node scripts/build-braw-helper.mjs
+
       - name: Build app + installer
         run: npm run ${{ matrix.script }}
 
