@@ -24,6 +24,11 @@ jobs:
     steps:
       - name: Verify it is a draft, then delete it
         run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid release tag. Expected vMAJOR.MINOR.PATCH."
+            exit 1
+          fi
           isDraft=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
           if [ "$isDraft" != "true" ]; then
             echo "::error::Release $TAG is not a draft — refusing to delete a live release."

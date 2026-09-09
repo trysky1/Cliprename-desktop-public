@@ -40,6 +40,11 @@ jobs:
     steps:
       - name: Create the release (installers attach as each build finishes)
         run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid release tag. Expected vMAJOR.MINOR.PATCH (for example v0.1.13)."
+            exit 1
+          fi
           cat > notes.md <<'MD'
           AI file sorting and renaming for video editors — the desktop companion to [cliprename.com](https://cliprename.com).
 
@@ -134,13 +139,17 @@ jobs:
 
       # The application source lives in the private repo; it exists only on
       # this ephemeral runner and is destroyed when the job ends.
-      - uses: actions/checkout@v5
+      # Pin third-party actions to immutable commits. Do not persist the private
+      # PAT in .git/config: dependency install/build scripts run immediately
+      # afterwards and must not be able to recover the clone credential.
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           repository: trysky1/cliprename-desktop
           ref: main
           token: ${{ secrets.PRIVATE_CLONE_TOKEN }}
+          persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
 
