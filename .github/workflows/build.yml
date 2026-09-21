@@ -11,6 +11,15 @@ name: Build installers
 on:
   workflow_dispatch:
     inputs:
+      source_sha:
+        description: 'Exact tested private-source commit (40-character SHA).'
+        required: true
+        type: string
+      publish:
+        description: 'Make the completed draft visible. Leave false until installer smoke tests pass.'
+        required: false
+        type: boolean
+        default: false
       release_tag:
         description: 'Publish a release under this tag (e.g. v0.1.13). Leave empty to just build.'
         required: false
@@ -25,13 +34,30 @@ on:
 permissions:
   contents: write
 
+# Build and promotion share one lock so asset replacement cannot overlap
+# publication of the same draft.
+concurrency:
+  group: cliprename-public-release
+  cancel-in-progress: false
+
 jobs:
+  validate-inputs:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      TAG: ${{ inputs.release_tag }}
+    steps:
+      - name: Require an immutable candidate and a safe release tag
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::source_sha must be a full commit SHA'; exit 1; }
+          [[ -z "$TAG" || "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Use a stable vX.Y.Z tag'; exit 1; }
   # Publishing: create the (empty) release page first; each build job then
   # attaches its installers DIRECTLY to it. The tag is created on this repo's
   # default branch (the source-less landing page), so the release's automatic
   # "Source code" archives contain no application source.
   prepare-release:
     name: Create release page
+    needs: [validate-inputs]
     if: inputs.release_tag != ''
     runs-on: ubuntu-latest
     env:
@@ -88,12 +114,11 @@ jobs:
           # ~20 minutes the builds take, with zero-then-some assets — during
           # the v0.1.36 build the website truthfully reported Windows and
           # Intel downloads as unavailable, because at that moment they were.
-          # Re-runs of an existing tag take the edit path, which leaves its
-          # published state untouched: iterating on a live tag never hides
-          # it, and a leftover draft from a failed run is reused rather than
-          # duplicated (GitHub happily stores two drafts under one tag name,
-          # and every later by-tag lookup would then be ambiguous).
+          # Reuse only an unpublished draft. Published assets are immutable;
+          # fixes to a shipped version require a new patch.
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            DRAFT=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')
+            [ "$DRAFT" = true ] || { echo '::error::A published release is immutable; use a new patch version'; exit 1; }
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" $PRE --notes-file notes.md
           else
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft $PRE \
@@ -102,9 +127,9 @@ jobs:
 
   build:
     name: ${{ matrix.label }}
-    needs: [prepare-release]
+    needs: [validate-inputs, prepare-release]
     # Run even when prepare-release is skipped (plain builds, no release).
-    if: always() && needs.prepare-release.result != 'failure'
+    if: always() && needs.validate-inputs.result == 'success' && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped')
     strategy:
       fail-fast: false
       matrix:
@@ -137,15 +162,28 @@ jobs:
       - uses: actions/checkout@v5
         with:
           repository: trysky1/cliprename-desktop
-          ref: main
+          ref: ${{ inputs.source_sha }}
           token: ${{ secrets.PRIVATE_CLONE_TOKEN }}
+          persist-credentials: false
+
+      - name: Verify source and release version
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          [ "$(git rev-parse HEAD)" = "$SOURCE_SHA" ] || exit 1
+          if [ -n "$TAG" ]; then
+            VERSION=$(node -p "require('./package.json').version")
+            [ "v$VERSION" = "$TAG" ] || { echo '::error::Tag must match the tested package version'; exit 1; }
+          fi
 
       - uses: actions/setup-node@v5
         with:
           node-version: 22
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Type-check
         run: npm run typecheck
@@ -188,7 +226,16 @@ jobs:
           fi
 
       - name: Build app + installer
+        env:
+          CR_BUILD_SHA: ${{ inputs.source_sha }}
         run: npm run ${{ matrix.script }}
+
+      - name: Verify packaged Windows runtime and feed
+        if: runner.os == 'Windows'
+        run: node scripts/qa-windows-package.mjs
+
+      - name: Launch the native packaged application with a fresh profile
+        run: node scripts/qa-packaged-launch.mjs
 
       # Publishing: attach the installers straight to the release. The .yml +
       # .blockmap files are the in-app updater's feed — without them installed
@@ -265,9 +312,8 @@ jobs:
   # set is present — three installers, the two macOS updater payloads, and
   # all four update feeds. If anything is missing, the job fails and the
   # draft stays hidden, so customers and the website keep resolving the
-  # previous complete release rather than a half-uploaded one. On an
-  # in-place rebuild of an already-published tag the flip is a no-op and
-  # this becomes a pure completeness check.
+  # previous complete release rather than a half-uploaded one. Publication
+  # is opt-in; the default leaves a complete draft for installer smoke tests.
   publish-release:
     name: Publish once complete
     needs: [build, merge-mac-feed]
@@ -300,5 +346,9 @@ jobs:
             fi
           done
           [ "$missing" = 0 ] || exit 1
-          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
-          echo "Release $TAG is live with a complete asset set."
+          if [ "${{ inputs.publish }}" = true ]; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+            echo "Release $TAG is live with a complete asset set."
+          else
+            echo "Release $TAG stays in draft for installer smoke tests and coordinated rollout."
+          fi

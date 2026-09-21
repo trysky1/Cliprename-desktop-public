@@ -23,7 +23,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: promote-release
+  group: cliprename-public-release
   cancel-in-progress: false
 
 jobs:
@@ -39,6 +39,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Use a stable vX.Y.Z tag'; exit 1; }
+
           if ! gh release view "$TAG" --repo "$REPO" --json tagName >/dev/null 2>&1; then
             echo "::error::No release tagged $TAG in $REPO."
             exit 1
@@ -49,8 +51,9 @@ jobs:
           # actually install before this becomes the version everyone gets.
           ASSETS=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name')
           MISSING=""
-          for PATTERN in -setup.exe -arm64.dmg -x64.dmg latest.yml latest-mac.yml; do
-            if ! printf '%s\n' "$ASSETS" | grep -q -- "$PATTERN"; then
+          VER="${TAG#v}"
+          for PATTERN in "ClipRename-$VER-setup.exe" "ClipRename-$VER-arm64.dmg" "ClipRename-$VER-x64.dmg" "ClipRename-$VER-arm64.zip" "ClipRename-$VER-x64.zip" latest.yml latest-mac.yml latest-mac-arm64.yml latest-mac-x64.yml; do
+            if ! printf '%s\n' "$ASSETS" | grep -qxF -- "$PATTERN"; then
               MISSING="$MISSING $PATTERN"
             fi
           done
@@ -72,7 +75,7 @@ jobs:
           # --latest is not redundant: it pins which release /releases/latest
           # returns, and that endpoint is what BOTH the app's stable update
           # check and the website's download page read.
-          gh release edit "$TAG" --repo "$REPO" --prerelease=false --latest
+          gh release edit "$TAG" --repo "$REPO" --draft=false --prerelease=false --latest
 
       - name: Confirm it is now the release users get
         run: |
