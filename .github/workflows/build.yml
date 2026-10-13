@@ -225,15 +225,6 @@ jobs:
             echo "No signing secrets — building unsigned."
           fi
 
-      # ClipRename's Blackmagic RAW reader (native/braw-helper in the source
-      # repo): a small C++ program that drives the decoder engine found on the
-      # user's machine. Needs nothing from Blackmagic to build (docs/BRAW.md).
-      # Never blocks the build: without it the app falls back to proxies and
-      # sound for BRAW clips. Same step as the private repo's dev.yml.
-      - name: Build the Blackmagic RAW reader
-        continue-on-error: true
-        run: node scripts/build-braw-helper.mjs
-
       - name: Build app + installer
         env:
           CR_BUILD_SHA: ${{ inputs.source_sha }}
@@ -245,6 +236,42 @@ jobs:
 
       - name: Launch the native packaged application with a fresh profile
         run: node scripts/qa-packaged-launch.mjs
+
+      # The macOS bundle that ships gets the same outside checks the Windows
+      # one gets from qa-windows-package.mjs: the Info.plist asar hash, a
+      # tampered copy refused, debug switches refused, TLS overrides dropped.
+      - name: macOS packaged security (asar integrity, refused switches)
+        if: runner.os == 'macOS'
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          APP_BUNDLE="$(ls -d release/mac*/ClipRename.app | head -1)"
+          test -n "$APP_BUNDLE"
+          node scripts/qa-packaged-security.mjs "$APP_BUNDLE/Contents/MacOS/ClipRename"
+
+      # The same real-app checks the private dev build runs on Windows, so the
+      # bytes users download pass them too. Fixtures and account answers are
+      # synthetic; no credit is spent.
+      - name: Install isolated runtime test driver
+        if: runner.os == 'Windows'
+        run: npm install --prefix .qa-runtime --no-save --package-lock=false --ignore-scripts --no-audit --no-fund playwright-core@1.63.0
+
+      - name: Windows app runtime and file-safety checks
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        env:
+          PLAYWRIGHT_MODULE: ../.qa-runtime/node_modules/playwright-core/index.mjs
+        run: |
+          node scripts/qa-clip-review.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/qa-tray-safety.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/qa-conversion.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/qa-gallery-trim.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/qa-credit-usage.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # Publishing: attach the installers straight to the release. The .yml +
       # .blockmap files are the in-app updater's feed — without them installed
