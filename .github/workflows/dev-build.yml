@@ -1,0 +1,424 @@
+name: Dev build
+
+# Builds a DEVELOPER build of ClipRename Desktop from the PRIVATE source repo,
+# on this public repo's runners, which are free and unmetered (Windows and
+# both Macs). The private repo's own `Dev build` workflow does the same job,
+# but private-repo minutes are billed, and the owner chose not to pay for
+# them.
+#
+# Nothing here is public. This repository never receives the source or the
+# installers:
+#   - the source is checked out only on the throwaway runner (read-only token
+#     PRIVATE_CLONE_TOKEN, the same one build.yml uses);
+#   - the installers go to ONE of two hidden places:
+#       1. with the secret DEV_RELEASE_TOKEN (a fine-grained token with
+#          "Contents: Read and write" on trysky1/cliprename-desktop ONLY):
+#          a prerelease on the PRIVATE repo, which is where the app's
+#          Developer channel looks (src/main/updates/updater.ts, DEV_REPO),
+#          so an installed dev build updates itself to the next one;
+#       2. without it: a DRAFT release here. GitHub shows drafts only to
+#          people who can push to this repo (the owner); no tag is created,
+#          and nothing else in this repo reads drafts (prune-releases.yml
+#          skips them, mirror-downloads.yml reads /releases/latest only,
+#          promote-release.yml acts on a tag it is given). It is never
+#          published by this workflow.
+#   - no workflow artifacts are uploaded (on a public repo any signed-in
+#     GitHub user could download them), and nothing taken from the private
+#     repo (commit messages, file contents) is printed to this run's log or
+#     summary, which are public. The log shows the build steps and test
+#     names, the same as build.yml's runs always have.
+#
+# Run it from the Actions tab: "Dev build" → Run workflow, with the private
+# commit to build.
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: 'Private-source commit to build (40-character SHA).'
+        required: true
+        type: string
+      platforms:
+        description: 'Which installers to build (fewer = faster)'
+        type: choice
+        options: [all, windows, macos]
+        default: all
+
+permissions:
+  contents: read
+
+# Not cancel-in-progress: a cancelled run would leave a release with only some
+# of its installers.
+concurrency:
+  group: dev-build
+  cancel-in-progress: false
+
+env:
+  PRIVATE_REPO: trysky1/cliprename-desktop
+
+jobs:
+  setup:
+    name: Work out the version and where it goes
+    runs-on: ubuntu-latest
+    # Write, so this run's token can see the drafts already here (a token that
+    # can't push sees no drafts), which the numbering below must count.
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      repo: ${{ steps.dest.outputs.repo }}
+      mode: ${{ steps.dest.outputs.mode }}
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - name: Check the inputs and the tokens
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          CLONE: ${{ secrets.PRIVATE_CLONE_TOKEN }}
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::source_sha must be a full 40-character commit SHA'; exit 1; }
+          if [ -z "$CLONE" ]; then
+            echo "::error::Missing PRIVATE_CLONE_TOKEN (the read-only token build.yml uses to fetch the source)."
+            exit 1
+          fi
+
+      - name: Choose where the installers go
+        id: dest
+        shell: bash
+        env:
+          RELEASE: ${{ secrets.DEV_RELEASE_TOKEN }}
+        run: |
+          if [ -n "$RELEASE" ]; then
+            echo "repo=$PRIVATE_REPO" >> "$GITHUB_OUTPUT"
+            echo "mode=private" >> "$GITHUB_OUTPUT"
+            echo "Destination: a prerelease on the private repo (Developer channel updates)."
+          else
+            echo "repo=$GITHUB_REPOSITORY" >> "$GITHUB_OUTPUT"
+            echo "mode=draft" >> "$GITHUB_OUTPUT"
+            echo "Destination: a hidden draft release on this repo (no DEV_RELEASE_TOKEN set)."
+          fi
+
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ env.PRIVATE_REPO }}
+          ref: ${{ inputs.source_sha }}
+          token: ${{ secrets.PRIVATE_CLONE_TOKEN }}
+          persist-credentials: false
+
+      - name: Version this dev build
+        id: v
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          MODE: ${{ steps.dest.outputs.mode }}
+          RELEASE_TOKEN: ${{ secrets.DEV_RELEASE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ "$(git rev-parse HEAD)" = "$SOURCE_SHA" ] || { echo '::error::Checked-out commit differs from source_sha'; exit 1; }
+          BASE=$(node -p "require('./package.json').version")
+          # package.json holds the last PUBLIC version; the dev stream belongs
+          # to the next patch (0.1.43 -> 0.1.44-dev.N), because in semver a
+          # prerelease ranks below its own release and would never be offered
+          # to someone already on 0.1.43.
+          CORE=${BASE%%-*}
+          IFS=. read -r MA MI PA <<< "$CORE"
+          NEXT="$MA.$MI.$((PA + 1))"
+          # N = one more than the highest dev.N already used for this version,
+          # in BOTH places a dev build can live, so the number only climbs.
+          tags() {
+            local repo=$1 token=$2
+            [ -n "$token" ] || return 0
+            GH_TOKEN="$token" gh api "repos/$repo/releases?per_page=100" --paginate --jq '.[].tag_name' 2>/dev/null || true
+          }
+          LAST=$( { tags "$GITHUB_REPOSITORY" "$GH_TOKEN"; tags "$PRIVATE_REPO" "$RELEASE_TOKEN"; } \
+            | sed -n "s/^v${NEXT//./\\.}-dev\.\([0-9][0-9]*\)$/\1/p" | sort -n | tail -1)
+          N=$(( ${LAST:-0} + 1 ))
+          VERSION="$NEXT-dev.$N"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Dev build \`$VERSION\`"
+            echo ""
+            echo "Last public version: \`$BASE\` · private commit \`${SOURCE_SHA:0:7}\`"
+            if [ "$MODE" = private ]; then
+              echo "Goes to: a prerelease on the private repo (Developer channel)."
+            else
+              echo "Goes to: a hidden draft release on this repo (only people who can push here see it)."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Decide which runners to use
+        id: m
+        shell: bash
+        env:
+          PLATFORMS: ${{ inputs.platforms || 'all' }}
+        run: |
+          WIN='{"os":"windows-latest","label":"Windows (PC)","script":"build:win"}'
+          ARM='{"os":"macos-14","label":"macOS (Apple Silicon)","script":"build:mac:arm64","arch":"arm64"}'
+          INT='{"os":"macos-15-intel","label":"macOS (Intel)","script":"build:mac:x64","arch":"x64"}'
+          case "$PLATFORMS" in
+            windows) INC="[$WIN]" ;;
+            macos)   INC="[$ARM,$INT]" ;;
+            *)       INC="[$WIN,$ARM,$INT]" ;;
+          esac
+          echo "matrix={\"include\":$INC}" >> "$GITHUB_OUTPUT"
+
+  release:
+    name: Create the hidden dev release
+    needs: setup
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.DEV_RELEASE_TOKEN || github.token }}
+      DEST: ${{ needs.setup.outputs.repo }}
+      MODE: ${{ needs.setup.outputs.mode }}
+      TAG: ${{ needs.setup.outputs.tag }}
+      VERSION: ${{ needs.setup.outputs.version }}
+      SOURCE_SHA: ${{ inputs.source_sha }}
+    steps:
+      - name: Create a draft (made visible only after every installer and feed arrived)
+        shell: bash
+        run: |
+          {
+            printf '**Developer build — not for users.**\n\n'
+            printf '| | |\n|---|---|\n'
+            printf '| Version | `%s` |\n' "$VERSION"
+            printf '| Private commit | `%s` |\n' "$SOURCE_SHA"
+            printf '\n'
+            if [ "$MODE" = private ]; then
+              printf 'Install it once; after that the app updates itself to the next dev build\n'
+              printf '(Settings → App updates → channel: Developer).\n'
+            else
+              printf 'A hidden draft: install it by hand. It does not update itself (that needs the\n'
+              printf 'DEV_RELEASE_TOKEN secret; see .github/workflows/dev-build.yml).\n'
+            fi
+          } > notes.md
+          # The tag must point at a commit in the repo the release lives in:
+          # the private commit itself there, this repo's own commit here (a
+          # draft creates no tag anyway).
+          if [ "$MODE" = private ]; then TARGET="$SOURCE_SHA"; else TARGET="$GITHUB_SHA"; fi
+          gh release create "$TAG" --repo "$DEST" --draft --prerelease --target "$TARGET" \
+            --title "Dev $VERSION" --notes-file notes.md \
+            || gh release edit "$TAG" --repo "$DEST" --notes-file notes.md
+
+  build:
+    name: ${{ matrix.label }}
+    needs: [setup, release]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.DEV_RELEASE_TOKEN || github.token }}
+      DEST: ${{ needs.setup.outputs.repo }}
+      TAG: ${{ needs.setup.outputs.tag }}
+    steps:
+      # The application source exists only on this runner and is destroyed
+      # when the job ends.
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ env.PRIVATE_REPO }}
+          ref: ${{ inputs.source_sha }}
+          token: ${{ secrets.PRIVATE_CLONE_TOKEN }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Stamp the version and the commit into the build
+        shell: bash
+        run: |
+          npm version "${{ needs.setup.outputs.version }}" --no-git-tag-version --allow-same-version
+          echo "CR_BUILD_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      # Unsigned, as the public builds are today (signing needs a paid Apple
+      # certificate; see build.yml).
+      - name: No code signing
+        shell: bash
+        run: echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
+
+      - name: Build app + installer
+        run: npm run ${{ matrix.script }}
+
+      - name: macOS packaged launch, refused debug switches and asar integrity
+        if: runner.os == 'macOS'
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          APP_BUNDLE="$(ls -d release/mac*/ClipRename.app | head -1)"
+          test -n "$APP_BUNDLE"
+          node scripts/qa-packaged-launch.mjs
+          node scripts/qa-packaged-security.mjs "$APP_BUNDLE/Contents/MacOS/ClipRename"
+
+      - name: Install isolated runtime test driver
+        if: runner.os == 'Windows'
+        run: npm install --prefix .qa-runtime --no-save --package-lock=false --ignore-scripts --no-audit --no-fund playwright-core@1.63.0
+
+      # The real Windows Electron/codec path, before the installer is offered.
+      # Synthetic fixtures and account answers; no credit is spent. (No
+      # screenshots are uploaded: artifacts here would be downloadable by any
+      # signed-in GitHub user.)
+      - name: Windows app runtime and file-safety checks
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        env:
+          PLAYWRIGHT_MODULE: ../.qa-runtime/node_modules/playwright-core/index.mjs
+        run: |
+          node scripts/qa-windows-package.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/qa-clip-review.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/qa-tray-safety.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/qa-conversion.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/qa-gallery-trim.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/qa-credit-usage.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # latest*.yml and the .blockmaps are the updater's feed. Each Mac job
+      # names its feed by CPU; merge-mac-feed writes the shared one.
+      - name: Upload installers to the hidden dev release
+        shell: bash
+        env:
+          BUILD_ARCH: ${{ matrix.arch }}
+        run: |
+          shopt -s nullglob
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            mv release/latest-mac.yml "release/latest-mac-$BUILD_ARCH.yml"
+          fi
+          files=(release/*.exe release/*.dmg release/*.zip release/latest*.yml release/*.blockmap)
+          echo "Uploading ${#files[@]} files"
+          gh release upload "$TAG" --repo "$DEST" --clobber "${files[@]}"
+
+  merge-mac-feed:
+    name: Merge the macOS update feeds
+    needs: [setup, build]
+    if: inputs.platforms != 'windows'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.DEV_RELEASE_TOKEN || github.token }}
+      DEST: ${{ needs.setup.outputs.repo }}
+      TAG: ${{ needs.setup.outputs.tag }}
+      VERSION: ${{ needs.setup.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ env.PRIVATE_REPO }}
+          ref: ${{ inputs.source_sha }}
+          token: ${{ secrets.PRIVATE_CLONE_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Validate and combine both architecture feeds
+        run: |
+          gh release download "$TAG" --repo "$DEST" \
+            --pattern 'latest-mac-arm64.yml' --pattern 'latest-mac-x64.yml'
+          node scripts/merge-mac-feeds.cjs latest-mac-arm64.yml latest-mac-x64.yml "$VERSION" latest-mac.yml
+          gh release upload "$TAG" --repo "$DEST" --clobber latest-mac.yml
+
+  finish:
+    name: Check the installers, then publish (private) or keep hidden (draft)
+    needs: [setup, build, merge-mac-feed]
+    if: >-
+      always() && needs.build.result == 'success' &&
+      (needs.merge-mac-feed.result == 'success' || needs.merge-mac-feed.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.DEV_RELEASE_TOKEN || github.token }}
+      DEST: ${{ needs.setup.outputs.repo }}
+      MODE: ${{ needs.setup.outputs.mode }}
+      TAG: ${{ needs.setup.outputs.tag }}
+      VERSION: ${{ needs.setup.outputs.version }}
+      PLATFORMS: ${{ inputs.platforms || 'all' }}
+    steps:
+      - name: Every expected installer and feed is there
+        shell: bash
+        run: |
+          assets=$(gh release view "$TAG" --repo "$DEST" --json assets --jq '.assets[].name')
+          expected=()
+          if [ "$PLATFORMS" != 'macos' ]; then
+            expected+=("ClipRename-$VERSION-setup.exe" "ClipRename-$VERSION-setup.exe.blockmap" 'latest.yml')
+          fi
+          if [ "$PLATFORMS" != 'windows' ]; then
+            expected+=('latest-mac.yml')
+            for arch in arm64 x64; do
+              expected+=("ClipRename-$VERSION-$arch.zip" "ClipRename-$VERSION-$arch.dmg" "latest-mac-$arch.yml")
+            done
+          fi
+          for name in "${expected[@]}"; do
+            grep -qxF "$name" <<< "$assets" || { echo "::error::Missing $name; the dev release stays a draft."; exit 1; }
+          done
+
+      - name: Publish on the private repo, or leave the draft hidden
+        shell: bash
+        run: |
+          if [ "$MODE" = private ]; then
+            # A prerelease on a PRIVATE repo: invisible without a token; the
+            # Developer channel sees it.
+            gh release edit "$TAG" --repo "$DEST" --draft=false --prerelease
+            echo "Published $TAG as a prerelease on the private repo." >> "$GITHUB_STEP_SUMMARY"
+          else
+            # Never published here: a published release on this repo would be
+            # public.
+            echo "Kept $TAG as a hidden draft on this repo (Releases, signed in)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  prune:
+    name: Keep the newest dev builds
+    needs: [setup, finish]
+    if: always() && needs.finish.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.DEV_RELEASE_TOKEN || github.token }}
+      DEST: ${{ needs.setup.outputs.repo }}
+      MODE: ${{ needs.setup.outputs.mode }}
+      TAG: ${{ needs.setup.outputs.tag }}
+    steps:
+      # Each dev build is ~300 MB across three platforms. Only "-dev.N" tags
+      # are ever considered (a stable release can never be pruned), only
+      # DRAFTS on this public repo, ordered by the dev NUMBER, and this run's
+      # own build is excluded outright.
+      - name: Delete all but the newest ones
+        shell: bash
+        run: |
+          KEEP=10; [ "$MODE" = draft ] && KEEP=5
+          gh api "repos/$DEST/releases?per_page=100" --paginate \
+            | jq -s --arg keep "$TAG" --arg mode "$MODE" --argjson n "$KEEP" -r '
+                add // []
+                | [ .[] | select(.tag_name | test("-dev\\.[0-9]+$"))
+                        | select($mode == "private" or .draft == true) ]
+                | sort_by(.tag_name | capture("-dev\\.(?<n>[0-9]+)$").n | tonumber)
+                | reverse | .[$n:] | .[] | select(.tag_name != $keep) | .tag_name' \
+            | while read -r t; do
+                [ -n "$t" ] || continue
+                echo "Deleting $t"
+                if [ "$MODE" = private ]; then
+                  gh release delete "$t" --repo "$DEST" --cleanup-tag --yes || true
+                else
+                  gh release delete "$t" --repo "$DEST" --yes || true
+                fi
+              done
